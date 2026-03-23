@@ -1,4 +1,3 @@
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -6,6 +5,7 @@ import {
   CheckCircle2,
   Compass,
   Download,
+  Loader2,
   MapPin,
   MapPinned,
   PlusCircle,
@@ -14,84 +14,51 @@ import {
   Star,
   User,
   Wallet,
+  XCircle,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Tab = "explore" | "post" | "profile";
+type Status = "idle" | "sending" | "success" | "error";
 
-interface TaskCard {
-  id: number;
-  title: string;
-  price: number;
+interface LiveTask {
+  task_id: string;
+  task_name: string;
+  price: string;
   location: string;
-  description: string;
-  author: string;
-  tag: string;
+  Description: string;
+  telegram_id: string;
+  status: string;
+  deadline: string;
+  category?: string;
 }
 
-const TASKS: TaskCard[] = [
-  {
-    id: 1,
-    title: "Laundry Pickup",
-    price: 120,
-    location: "Hostel Block C",
-    description:
-      "Need someone to drop off laundry at the dhobi and pick it up by evening.",
-    author: "Arjun M.",
-    tag: "Errands",
-  },
-  {
-    id: 2,
-    title: "Python Assignment Help",
-    price: 300,
-    location: "CS Lab, 2nd Floor",
-    description:
-      "Need help debugging my ML project code — deadline is tomorrow!",
-    author: "Priya S.",
-    tag: "Academic",
-  },
-  {
-    id: 3,
-    title: "Grocery Run",
-    price: 80,
-    location: "Main Gate Store",
-    description:
-      "Pick up 2kg rice and Maggi from the store near the main gate.",
-    author: "Rohit K.",
-    tag: "Errands",
-  },
-  {
-    id: 4,
-    title: "Notes Digitization",
-    price: 200,
-    location: "Library Reading Room",
-    description:
-      "Scan and convert 30 pages of handwritten notes to PDF format.",
-    author: "Sneha R.",
-    tag: "Academic",
-  },
-  {
-    id: 5,
-    title: "Bike Servicing Escort",
-    price: 150,
-    location: "Campus Workshop",
-    description:
-      "Come with me to the bike repair shop nearby for safety & company.",
-    author: "Dev P.",
-    tag: "Transport",
-  },
-  {
-    id: 6,
-    title: "Printing & Binding",
-    price: 60,
-    location: "Xerox Center",
-    description:
-      "Print and spiral bind my final year project report — 80 pages.",
-    author: "Kavya T.",
-    tag: "Printing",
-  },
-];
+const SHEETDB = "https://sheetdb.io/api/v1/m2d47h1nseqog";
+
+async function postUser(data: object) {
+  const res = await fetch(SHEETDB, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet: "users", data: [data] }),
+  });
+  if (!res.ok) throw new Error("Failed to save profile");
+}
+
+async function postTask(data: object) {
+  const res = await fetch(SHEETDB, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet: "task", data: [data] }),
+  });
+  if (!res.ok) throw new Error("Failed to post task");
+}
+
+async function fetchTasks(): Promise<LiveTask[]> {
+  const res = await fetch(`${SHEETDB}?sheet=task`);
+  if (!res.ok) throw new Error("Failed to fetch tasks");
+  return res.json();
+}
 
 const WHY_FEATURES = [
   {
@@ -134,7 +101,12 @@ function StyledInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      style={{ ...inputBase, ...(focused ? inputFocus : {}), ...props.style }}
+      style={{
+        ...inputBase,
+        ...(focused && !props.disabled ? inputFocus : {}),
+        ...(props.disabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+        ...props.style,
+      }}
       onFocus={(e) => {
         setFocused(true);
         props.onFocus?.(e);
@@ -278,7 +250,11 @@ function Header({
               key={tab}
               data-ocid={`nav.${tab}.link`}
               onClick={() => onTabChange(tab)}
-              className={`capitalize transition-colors ${activeTab === tab ? "text-foreground font-semibold" : "text-muted-foreground hover:text-foreground"}`}
+              className={`capitalize transition-colors ${
+                activeTab === tab
+                  ? "text-foreground font-semibold"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
             >
               {tab === "post" ? "Post Task" : tab}
             </button>
@@ -338,7 +314,14 @@ function HeroSection({ onExplore }: { onExplore: () => void }) {
   );
 }
 
-function TaskCardComponent({ task, index }: { task: TaskCard; index: number }) {
+function TaskCardComponent({ task, index }: { task: LiveTask; index: number }) {
+  const telegramHandle = task.telegram_id?.replace(/^@/, "") ?? "";
+  const telegramUrl = telegramHandle
+    ? `https://t.me/${telegramHandle}?text=${encodeURIComponent(
+        `Hi! I am interested in your task: ${task.task_name}`,
+      )}`
+    : "";
+
   return (
     <article
       data-ocid={`tasks.item.${index}`}
@@ -346,7 +329,7 @@ function TaskCardComponent({ task, index }: { task: TaskCard; index: number }) {
     >
       <div className="flex items-start justify-between gap-2">
         <h3 className="text-sm font-bold text-foreground leading-snug flex-1">
-          {task.title}
+          {task.task_name}
         </h3>
         <span
           className="shrink-0 text-xs font-bold px-2.5 py-1 rounded-full"
@@ -360,7 +343,7 @@ function TaskCardComponent({ task, index }: { task: TaskCard; index: number }) {
         </span>
       </div>
       <p className="text-xs text-muted-foreground leading-relaxed">
-        {task.description}
+        {task.Description}
       </p>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div
@@ -373,47 +356,40 @@ function TaskCardComponent({ task, index }: { task: TaskCard; index: number }) {
           <MapPin className="w-3 h-3" />
           {task.location}
         </div>
-        <Badge
-          variant="outline"
-          className="text-xs rounded-full"
+        {task.deadline ? (
+          <span className="text-xs" style={{ color: "oklch(0.60 0 0)" }}>
+            Due: {task.deadline}
+          </span>
+        ) : null}
+      </div>
+      {telegramHandle ? (
+        <Button
+          type="button"
+          data-ocid={`tasks.item.${index}.button`}
+          className="w-full mt-1 glow-button purple-gradient border-0 text-white text-xs font-semibold rounded-xl h-9"
+          onClick={() =>
+            window.open(telegramUrl, "_blank", "noopener,noreferrer")
+          }
+        >
+          <Send className="w-3.5 h-3.5 mr-2" />
+          Discuss on Telegram
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          data-ocid={`tasks.item.${index}.button`}
+          disabled
+          className="w-full mt-1 rounded-xl h-9 text-xs font-semibold"
           style={{
-            borderColor: "oklch(0.30 0.012 265)",
-            color: "oklch(0.65 0 0)",
+            background: "oklch(0.22 0.01 265)",
+            color: "oklch(0.50 0 0)",
+            border: "1px solid oklch(0.28 0.012 265)",
           }}
         >
-          {task.tag}
-        </Badge>
-      </div>
-      <p className="text-xs" style={{ color: "oklch(0.60 0 0)" }}>
-        Posted by {task.author}
-      </p>
-      <Button
-        type="button"
-        data-ocid={`tasks.item.${index}.button`}
-        className="w-full mt-1 glow-button purple-gradient border-0 text-white text-xs font-semibold rounded-xl h-9"
-      >
-        <Send className="w-3.5 h-3.5 mr-2" />
-        Discuss on Telegram
-      </Button>
+          No Contact Info
+        </Button>
+      )}
     </article>
-  );
-}
-
-function FeaturedTasksSection() {
-  return (
-    <section className="px-4 py-8 max-w-3xl mx-auto">
-      <h2 className="text-xl sm:text-2xl font-bold text-center mb-6">
-        Featured Campus Tasks &amp; Listings
-      </h2>
-      <div
-        className="grid grid-cols-1 sm:grid-cols-2 gap-4"
-        data-ocid="tasks.list"
-      >
-        {TASKS.map((task, i) => (
-          <TaskCardComponent key={task.id} task={task} index={i + 1} />
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -502,38 +478,53 @@ function PostTaskScreen() {
     title: "",
     price: "",
     location: "",
+    telegram: "",
     deadline: "",
     description: "",
   };
   const [fields, setFields] = useState(emptyPost);
-  const [submitted, setSubmitted] = useState(false);
-  const [lastTitle, setLastTitle] = useState("");
-  const [lastPrice, setLastPrice] = useState("");
-  const [lastLocation, setLastLocation] = useState("");
-  const [lastDeadline, setLastDeadline] = useState("");
+  const [status, setStatus] = useState<Status>("idle");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [lastTask, setLastTask] = useState(emptyPost);
 
   function handleChange(
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) {
     const { name, value } = e.target;
+    setStatus("idle");
     setFields((prev) => ({ ...prev, [name]: value }));
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLastTitle(fields.title);
-    setLastPrice(fields.price);
-    setLastLocation(fields.location);
-    setLastDeadline(fields.deadline);
-    setSubmitted(true);
+    setStatus("sending");
+    setErrorMsg("");
+    try {
+      await postTask({
+        task_id: `task_${Date.now()}`,
+        task_name: fields.title,
+        price: fields.price,
+        location: fields.location,
+        deadline: fields.deadline,
+        Description: fields.description,
+        telegram_id: fields.telegram.replace(/^@/, ""),
+        status: "active",
+      });
+      setLastTask(fields);
+      setStatus("success");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Something went wrong");
+      setStatus("error");
+    }
   }
 
   function handleReset() {
     setFields(emptyPost);
-    setSubmitted(false);
+    setStatus("idle");
+    setErrorMsg("");
   }
 
-  if (submitted) {
+  if (status === "success") {
     return (
       <main className="flex-1 flex flex-col items-center justify-center px-4 py-16">
         <div
@@ -561,7 +552,7 @@ function PostTaskScreen() {
           </h2>
           <p className="text-muted-foreground text-sm text-center">
             <span className="font-semibold text-foreground">
-              &ldquo;{lastTitle}&rdquo;
+              &ldquo;{lastTask.title}&rdquo;
             </span>{" "}
             has been posted. Campus helpers will reach out on Telegram soon.
           </p>
@@ -578,16 +569,16 @@ function PostTaskScreen() {
                 className="font-bold"
                 style={{ color: "oklch(0.78 0.20 295)" }}
               >
-                ₹{lastPrice}
+                ₹{lastTask.price}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Location</span>
-              <span className="text-foreground">{lastLocation}</span>
+              <span className="text-foreground">{lastTask.location}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Deadline</span>
-              <span className="text-foreground">{lastDeadline}</span>
+              <span className="text-foreground">{lastTask.deadline}</span>
             </div>
           </div>
           <Button
@@ -624,6 +615,21 @@ function PostTaskScreen() {
             Let campus helpers come to you.
           </p>
         </div>
+
+        {status === "error" && (
+          <div
+            data-ocid="post_task.error_state"
+            className="flex items-center gap-3 rounded-xl px-4 py-3 mb-5 text-sm font-medium"
+            style={{
+              background: "oklch(0.25 0.08 25 / 0.3)",
+              border: "1px solid oklch(0.45 0.15 25 / 0.5)",
+              color: "oklch(0.75 0.18 25)",
+            }}
+          >
+            <XCircle className="w-4 h-4 shrink-0" />
+            {errorMsg || "Failed to post task. Please try again."}
+          </div>
+        )}
 
         <form
           onSubmit={handleSubmit}
@@ -697,6 +703,30 @@ function PostTaskScreen() {
 
           <div className="flex flex-col gap-1">
             <Label
+              htmlFor="post-telegram"
+              className="text-sm font-medium text-muted-foreground"
+            >
+              Your Telegram Username{" "}
+              <span style={{ color: "oklch(0.65 0.22 15)" }}>*</span>
+            </Label>
+            <StyledInput
+              id="post-telegram"
+              name="telegram"
+              type="text"
+              data-ocid="post_task.input"
+              placeholder="e.g. arjunmehta"
+              value={fields.telegram}
+              onChange={handleChange}
+              required
+              autoComplete="username"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              No @ symbol needed
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <Label
               htmlFor="post-deadline"
               className="text-sm font-medium text-muted-foreground"
             >
@@ -737,10 +767,20 @@ function PostTaskScreen() {
           <Button
             type="submit"
             data-ocid="post_task.submit_button"
+            disabled={status === "sending"}
             className="w-full glow-button purple-gradient border-0 text-white font-semibold rounded-xl h-11 mt-2"
           >
-            <PlusCircle className="w-4 h-4 mr-2" />
-            Post Task
+            {status === "sending" ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Posting...
+              </>
+            ) : (
+              <>
+                <PlusCircle className="w-4 h-4 mr-2" />
+                Post Task
+              </>
+            )}
           </Button>
         </form>
       </div>
@@ -748,7 +788,13 @@ function PostTaskScreen() {
   );
 }
 
-function ProfileScreen() {
+function ProfileScreen({
+  onProfileSaved,
+  profileAlreadySaved,
+}: {
+  onProfileSaved: () => void;
+  profileAlreadySaved: boolean;
+}) {
   const [fields, setFields] = useState({
     fullName: "",
     telegram: "",
@@ -756,17 +802,36 @@ function ProfileScreen() {
     upiId: "",
     collegeId: "",
   });
-  const [saved, setSaved] = useState(false);
+  const [status, setStatus] = useState<Status>("idle");
+  const [errorMsg, setErrorMsg] = useState("");
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target;
-    setSaved(false);
+    setStatus("idle");
     setFields((prev) => ({ ...prev, [name]: value }));
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setSaved(true);
+    if (profileAlreadySaved) return;
+    setStatus("sending");
+    setErrorMsg("");
+    try {
+      await postUser({
+        full_name: fields.fullName,
+        telegram_id: fields.telegram.replace(/^@/, ""),
+        phone_number: fields.phone,
+        upi_id: fields.upiId,
+        student_id: fields.collegeId,
+      });
+      setStatus("success");
+      setTimeout(() => {
+        onProfileSaved();
+      }, 1000);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Something went wrong");
+      setStatus("error");
+    }
   }
 
   const initials = fields.fullName
@@ -810,7 +875,22 @@ function ProfileScreen() {
           </p>
         </div>
 
-        {saved && (
+        {profileAlreadySaved && (
+          <div
+            data-ocid="profile.success_state"
+            className="flex items-center gap-3 rounded-xl px-4 py-3 mb-5 text-sm font-medium"
+            style={{
+              background: "oklch(0.25 0.08 145 / 0.25)",
+              border: "1px solid oklch(0.45 0.15 145 / 0.5)",
+              color: "oklch(0.72 0.18 145)",
+            }}
+          >
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            Your profile has already been set up.
+          </div>
+        )}
+
+        {status === "success" && !profileAlreadySaved && (
           <div
             data-ocid="profile.success_state"
             className="flex items-center gap-3 rounded-xl px-4 py-3 mb-5 text-sm font-medium"
@@ -821,7 +901,22 @@ function ProfileScreen() {
             }}
           >
             <CheckCircle2 className="w-4 h-4 shrink-0" />
-            Profile saved!
+            Profile saved successfully!
+          </div>
+        )}
+
+        {status === "error" && (
+          <div
+            data-ocid="profile.error_state"
+            className="flex items-center gap-3 rounded-xl px-4 py-3 mb-5 text-sm font-medium"
+            style={{
+              background: "oklch(0.25 0.08 25 / 0.3)",
+              border: "1px solid oklch(0.45 0.15 25 / 0.5)",
+              color: "oklch(0.75 0.18 25)",
+            }}
+          >
+            <XCircle className="w-4 h-4 shrink-0" />
+            {errorMsg || "Failed to save profile. Please try again."}
           </div>
         )}
 
@@ -849,7 +944,8 @@ function ProfileScreen() {
               placeholder="e.g. Arjun Mehta"
               value={fields.fullName}
               onChange={handleChange}
-              required
+              required={!profileAlreadySaved}
+              disabled={profileAlreadySaved}
               autoComplete="name"
             />
           </div>
@@ -870,7 +966,8 @@ function ProfileScreen() {
               placeholder="e.g. arjunmehta"
               value={fields.telegram}
               onChange={handleChange}
-              required
+              required={!profileAlreadySaved}
+              disabled={profileAlreadySaved}
               autoComplete="username"
             />
             <p className="text-xs text-muted-foreground mt-1">
@@ -894,7 +991,8 @@ function ProfileScreen() {
               placeholder="e.g. 9876543210"
               value={fields.phone}
               onChange={handleChange}
-              required
+              required={!profileAlreadySaved}
+              disabled={profileAlreadySaved}
               autoComplete="tel"
             />
           </div>
@@ -914,7 +1012,8 @@ function ProfileScreen() {
               placeholder="name@okicici"
               value={fields.upiId}
               onChange={handleChange}
-              required
+              required={!profileAlreadySaved}
+              disabled={profileAlreadySaved}
               autoComplete="off"
             />
           </div>
@@ -935,7 +1034,8 @@ function ProfileScreen() {
               placeholder="e.g. CS21B042"
               value={fields.collegeId}
               onChange={handleChange}
-              required
+              required={!profileAlreadySaved}
+              disabled={profileAlreadySaved}
               autoComplete="off"
             />
           </div>
@@ -943,9 +1043,32 @@ function ProfileScreen() {
           <Button
             type="submit"
             data-ocid="profile.submit_button"
-            className="w-full glow-button purple-gradient border-0 text-white font-semibold rounded-xl h-11 mt-2"
+            disabled={status === "sending" || profileAlreadySaved}
+            className={`w-full border-0 text-white font-semibold rounded-xl h-11 mt-2 ${
+              profileAlreadySaved
+                ? "opacity-50 cursor-not-allowed"
+                : "glow-button purple-gradient"
+            }`}
+            style={{
+              background: profileAlreadySaved
+                ? "oklch(0.30 0.04 265)"
+                : undefined,
+              boxShadow: profileAlreadySaved ? "none" : undefined,
+            }}
           >
-            Save Profile
+            {status === "sending" ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Saving...
+              </>
+            ) : profileAlreadySaved ? (
+              <>
+                <CheckCircle2 className="w-4 h-4 mr-2" />
+                Profile Saved
+              </>
+            ) : (
+              "Save Profile"
+            )}
           </Button>
         </form>
 
@@ -956,12 +1079,14 @@ function ProfileScreen() {
             border: "1px solid oklch(0.24 0.012 265)",
           }}
         >
-          {[
-            ["Tasks Posted", "0"],
-            ["Tasks Completed", "0"],
-            ["Total Earned", "₹0"],
-            ["Rating", "—"],
-          ].map(([label, value]) => (
+          {(
+            [
+              ["Tasks Posted", "0"],
+              ["Tasks Completed", "0"],
+              ["Total Earned", "₹0"],
+              ["Rating", "—"],
+            ] as [string, string][]
+          ).map(([label, value]) => (
             <div
               key={label}
               className="flex justify-between py-2 border-b border-border last:border-0"
@@ -1001,7 +1126,9 @@ function BottomNav({
               key={tab.id}
               data-ocid={`bottomnav.${tab.id}.tab`}
               onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center gap-1 py-2 px-4 rounded-2xl transition-all duration-200 ${isPost ? "relative -top-2" : ""}`}
+              className={`flex flex-col items-center gap-1 py-2 px-4 rounded-2xl transition-all duration-200 ${
+                isPost ? "relative -top-2" : ""
+              }`}
               aria-label={tab.label}
               aria-current={isActive ? "page" : undefined}
             >
@@ -1045,11 +1172,75 @@ function BottomNav({
   );
 }
 
-function ExploreScreen() {
+function ExploreScreen({
+  tasks,
+  loading,
+  fetchError,
+}: {
+  tasks: LiveTask[];
+  loading: boolean;
+  fetchError: string;
+}) {
   return (
     <main className="flex-1">
       <HeroSection onExplore={() => {}} />
-      <FeaturedTasksSection />
+
+      <section className="px-4 py-8 max-w-3xl mx-auto">
+        <h2 className="text-xl sm:text-2xl font-bold text-center mb-6">
+          Featured Campus Tasks &amp; Listings
+        </h2>
+
+        {loading && (
+          <div
+            data-ocid="tasks.loading_state"
+            className="flex flex-col items-center justify-center py-16 gap-3"
+          >
+            <Loader2
+              className="w-8 h-8 animate-spin"
+              style={{ color: "oklch(0.70 0.22 295)" }}
+            />
+            <p className="text-sm text-muted-foreground">
+              Loading campus tasks...
+            </p>
+          </div>
+        )}
+
+        {!loading && fetchError && (
+          <div
+            data-ocid="tasks.error_state"
+            className="flex items-center justify-center gap-2 py-10 text-sm"
+            style={{ color: "oklch(0.70 0.18 25)" }}
+          >
+            <XCircle className="w-4 h-4" />
+            {fetchError}
+          </div>
+        )}
+
+        {!loading && !fetchError && tasks.length === 0 && (
+          <div
+            data-ocid="tasks.empty_state"
+            className="text-center py-16 text-muted-foreground text-sm"
+          >
+            No tasks found. Be the first to post one!
+          </div>
+        )}
+
+        {!loading && !fetchError && tasks.length > 0 && (
+          <div
+            className="grid grid-cols-1 sm:grid-cols-2 gap-4"
+            data-ocid="tasks.list"
+          >
+            {tasks.map((task, i) => (
+              <TaskCardComponent
+                key={task.task_id || i}
+                task={task}
+                index={i + 1}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
       <WhyProxiiSection />
       <Footer />
     </main>
@@ -1058,17 +1249,78 @@ function ExploreScreen() {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>("explore");
+  const [tasks, setTasks] = useState<LiveTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksFetched, setTasksFetched] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+  const [profileSaved, setProfileSaved] = useState(
+    () => localStorage.getItem("proxii_profile_saved") === "true",
+  );
+
+  useEffect(() => {
+    if (!tasksFetched) {
+      setTasksLoading(true);
+      fetchTasks()
+        .then((data) => {
+          setTasks(data);
+          setTasksFetched(true);
+        })
+        .catch((err) => {
+          setFetchError(
+            err instanceof Error ? err.message : "Failed to load tasks",
+          );
+          setTasksFetched(true);
+        })
+        .finally(() => setTasksLoading(false));
+    }
+  }, [tasksFetched]);
+
+  function handleTabChange(tab: Tab) {
+    setActiveTab(tab);
+    if (tab === "explore" && !tasksFetched) {
+      setTasksLoading(true);
+      fetchTasks()
+        .then((data) => {
+          setTasks(data);
+          setTasksFetched(true);
+        })
+        .catch((err) => {
+          setFetchError(
+            err instanceof Error ? err.message : "Failed to load tasks",
+          );
+          setTasksFetched(true);
+        })
+        .finally(() => setTasksLoading(false));
+    }
+  }
+
+  function handleProfileSaved() {
+    localStorage.setItem("proxii_profile_saved", "true");
+    setProfileSaved(true);
+    handleTabChange("explore");
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground relative">
       <AnimatedBackground />
       <div className="relative z-10 flex flex-col min-h-screen">
-        <Header activeTab={activeTab} onTabChange={setActiveTab} />
-        {activeTab === "explore" && <ExploreScreen />}
+        <Header activeTab={activeTab} onTabChange={handleTabChange} />
+        {activeTab === "explore" && (
+          <ExploreScreen
+            tasks={tasks}
+            loading={tasksLoading}
+            fetchError={fetchError}
+          />
+        )}
         {activeTab === "post" && <PostTaskScreen />}
-        {activeTab === "profile" && <ProfileScreen />}
+        {activeTab === "profile" && (
+          <ProfileScreen
+            onProfileSaved={handleProfileSaved}
+            profileAlreadySaved={profileSaved}
+          />
+        )}
       </div>
-      <BottomNav active={activeTab} onTabChange={setActiveTab} />
+      <BottomNav active={activeTab} onTabChange={handleTabChange} />
     </div>
   );
 }
