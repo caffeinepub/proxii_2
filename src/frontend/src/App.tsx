@@ -641,16 +641,22 @@ function TaskDetailModal({
   }
 
   async function handleDiscussChat() {
-    if (!posterInfo) return;
     setChatLoading(true);
-    const handle = posterInfo.telegram_id?.replace(/^@/, "");
-    if (handle) {
-      const url = `https://t.me/${handle}?text=${encodeURIComponent(`Hi! I am interested in your task: ${task.task_name}`)}`;
-      window.open(url, "_blank", "noopener,noreferrer");
-    } else {
-      alert("Poster hasn't added a Telegram ID yet.");
+    try {
+      let handle = posterInfo?.telegram_id?.replace(/^@/, "");
+      if (!handle && task.user_id_origintor) {
+        const user = await fetchUserById(task.user_id_origintor);
+        handle = user?.telegram_id?.replace(/^@/, "");
+      }
+      if (handle) {
+        const url = `https://t.me/${handle}?text=${encodeURIComponent(`Hi! I am interested in your task: ${task.task_name}`)}`;
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else {
+        alert("Poster hasn't added a Telegram ID yet.");
+      }
+    } finally {
+      setChatLoading(false);
     }
-    setChatLoading(false);
   }
 
   const catStyle = task.category
@@ -1016,7 +1022,7 @@ function TaskDetailModal({
                 type="button"
                 data-ocid="task_detail.secondary_button"
                 onClick={handleDiscussChat}
-                disabled={chatLoading || !posterInfo}
+                disabled={chatLoading}
                 style={{
                   width: "100%",
                   padding: "0.625rem 1rem",
@@ -1032,7 +1038,7 @@ function TaskDetailModal({
                   justifyContent: "center",
                   gap: "0.5rem",
                   transition: "all 0.2s",
-                  opacity: chatLoading || !posterInfo ? 0.6 : 1,
+                  opacity: chatLoading ? 0.6 : 1,
                 }}
               >
                 {chatLoading ? (
