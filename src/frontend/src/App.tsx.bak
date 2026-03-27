@@ -6,13 +6,11 @@ import {
   Compass,
   Download,
   Edit2,
-  ExternalLink,
   Loader2,
   Lock,
   LogOut,
   MapPin,
   MapPinned,
-  MessageCircle,
   PlusCircle,
   RefreshCw,
   Send,
@@ -39,7 +37,6 @@ interface LiveTask {
   status: string;
   deadline: string;
   category?: string;
-  user_id_origintor?: string;
 }
 
 interface UserRow {
@@ -53,19 +50,17 @@ interface UserRow {
   student_id: string;
   password_hash: string;
 }
-interface TaskHistory {
-  task_id: string;
-  task_name: string;
-  user_id_origintor: string;
-  worker_id: string;
-  status: string;
-  completion_date: string;
-  payment_status: string;
-  price: string;
-  rating_score: string;
-}
 
 const SHEETDB = "https://sheetdb.io/api/v1/m2d47h1nseqog";
+
+// ── Crypto helper ────────────────────────────────────────────────────────────
+async function sha256(message: string): Promise<string> {
+  const msgBuf = new TextEncoder().encode(message);
+  const hashBuf = await crypto.subtle.digest("SHA-256", msgBuf);
+  return Array.from(new Uint8Array(hashBuf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 // ── SheetDB helpers ──────────────────────────────────────────────────────────
 async function postTask(data: object) {
@@ -81,16 +76,6 @@ async function fetchTasks(): Promise<LiveTask[]> {
   const res = await fetch(`${SHEETDB}?sheet=task`);
   if (!res.ok) throw new Error("Failed to fetch tasks");
   return res.json();
-}
-
-async function fetchTaskHistory(): Promise<TaskHistory[]> {
-  try {
-    const res = await fetch(`${SHEETDB}?sheet=task_history`);
-    if (!res.ok) return [];
-    return res.json();
-  } catch {
-    return [];
-  }
 }
 
 async function fetchUserById(userId: string): Promise<UserRow | null> {
@@ -419,64 +404,16 @@ function HeroSection({ onExplore }: { onExplore: () => void }) {
   );
 }
 
-const CATEGORY_STYLES: Record<
-  string,
-  { bg: string; color: string; border: string }
-> = {
-  Assignment: {
-    bg: "oklch(0.22 0.08 250 / 0.35)",
-    color: "oklch(0.72 0.16 250)",
-    border: "oklch(0.45 0.14 250 / 0.5)",
-  },
-  "Notes/Books": {
-    bg: "oklch(0.22 0.08 155 / 0.35)",
-    color: "oklch(0.72 0.16 155)",
-    border: "oklch(0.45 0.14 155 / 0.5)",
-  },
-  "Delivery/Pick-up": {
-    bg: "oklch(0.22 0.08 55 / 0.35)",
-    color: "oklch(0.78 0.16 55)",
-    border: "oklch(0.45 0.14 55 / 0.5)",
-  },
-  "Tech Support": {
-    bg: "oklch(0.22 0.08 200 / 0.35)",
-    color: "oklch(0.72 0.16 200)",
-    border: "oklch(0.45 0.14 200 / 0.5)",
-  },
-  "Lab Work": {
-    bg: "oklch(0.22 0.08 90 / 0.35)",
-    color: "oklch(0.78 0.16 90)",
-    border: "oklch(0.45 0.14 90 / 0.5)",
-  },
-  Other: {
-    bg: "oklch(0.22 0.01 265 / 0.35)",
-    color: "oklch(0.65 0.01 265)",
-    border: "oklch(0.38 0.01 265 / 0.5)",
-  },
-};
-
-function TaskCardComponent({
-  task,
-  index,
-  currentUserId,
-  onOpen,
-}: {
-  task: LiveTask;
-  index: number;
-  currentUserId: string | null;
-  onOpen: (task: LiveTask) => void;
-}) {
-  const isMyTask = currentUserId && task.user_id_origintor === currentUserId;
-  const catStyle = task.category
-    ? (CATEGORY_STYLES[task.category] ?? CATEGORY_STYLES.Other)
-    : null;
+function TaskCardComponent({ task, index }: { task: LiveTask; index: number }) {
+  const telegramHandle = task.telegram_id?.replace(/^@/, "") ?? "";
+  const telegramUrl = telegramHandle
+    ? `https://t.me/${telegramHandle}?text=${encodeURIComponent(`Hi! I am interested in your task: ${task.task_name}`)}`
+    : "";
 
   return (
-    <button
-      type="button"
+    <article
       data-ocid={`tasks.item.${index}`}
-      className="card-surface rounded-2xl p-4 flex flex-col gap-3 transition-all duration-300 cursor-pointer hover:border-purple-500/50 w-full text-left"
-      onClick={() => onOpen(task)}
+      className="card-surface rounded-2xl p-4 flex flex-col gap-3 transition-all duration-300 cursor-pointer"
     >
       <div className="flex items-start justify-between gap-2">
         <h3 className="text-sm font-bold text-foreground leading-snug flex-1">
@@ -493,13 +430,13 @@ function TaskCardComponent({
           ₹{task.price}
         </span>
       </div>
-      {catStyle && task.category ? (
+      {task.category ? (
         <span
           className="self-start text-xs font-semibold px-2 py-0.5 rounded-full"
           style={{
-            background: catStyle.bg,
-            color: catStyle.color,
-            border: `1px solid ${catStyle.border}`,
+            background: "oklch(0.22 0.06 220 / 0.35)",
+            color: "oklch(0.72 0.14 220)",
+            border: "1px solid oklch(0.45 0.12 220 / 0.5)",
           }}
         >
           {task.category}
@@ -525,475 +462,34 @@ function TaskCardComponent({
           </span>
         ) : null}
       </div>
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <span className="text-xs" style={{ color: "oklch(0.55 0.10 295)" }}>
-          {isMyTask ? "Your task" : "Tap to view details"}
-        </span>
-        <ExternalLink
-          className="w-3.5 h-3.5"
-          style={{ color: "oklch(0.55 0.10 295)" }}
-        />
-      </div>
-    </button>
-  );
-}
-
-function TaskDetailModal({
-  task,
-  currentUserId,
-  allTasks,
-  onClose,
-}: {
-  task: LiveTask;
-  currentUserId: string | null;
-  allTasks: LiveTask[];
-  onClose: () => void;
-}) {
-  const [posterInfo, setPosterInfo] = useState<UserRow | null>(null);
-  const [posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
-  const [posterLoading, setPosterLoading] = useState(true);
-  const [requestSent, setRequestSent] = useState(false);
-  const [chatLoading, setChatLoading] = useState(false);
-  const isMyTask = currentUserId && task.user_id_origintor === currentUserId;
-
-  useEffect(() => {
-    if (!task.user_id_origintor) {
-      setPosterLoading(false);
-      return;
-    }
-    Promise.all([fetchUserById(task.user_id_origintor), fetchTaskHistory()])
-      .then(([user, history]) => {
-        setPosterInfo(user);
-        setPosterHistory(
-          history.filter(
-            (h) => h.worker_id === (user?.user_id ?? task.user_id_origintor),
-          ),
-        );
-      })
-      .catch(() => {})
-      .finally(() => setPosterLoading(false));
-  }, [task.user_id_origintor]);
-
-  const posterTasksCount = allTasks.filter(
-    (t) => t.user_id_origintor === task.user_id_origintor,
-  ).length;
-
-  const ratings = posterHistory
-    .map((h) => Number.parseFloat(h.rating_score))
-    .filter((n) => !Number.isNaN(n));
-  const avgRating =
-    ratings.length > 0
-      ? ratings.reduce((a, b) => a + b, 0) / ratings.length
-      : null;
-
-  function renderStars(rating: number) {
-    const full = Math.floor(rating);
-    const half = rating - full >= 0.5;
-    const starKeys = ["s1", "s2", "s3", "s4", "s5"];
-    return (
-      <span className="flex items-center gap-0.5">
-        {starKeys.map((k, i) => {
-          if (i < full)
-            return (
-              <span key={k} style={{ color: "oklch(0.80 0.15 75)" }}>
-                ★
-              </span>
-            );
-          if (i === full && half)
-            return (
-              <span key={k} style={{ color: "oklch(0.80 0.15 75)" }}>
-                ½
-              </span>
-            );
-          return (
-            <span key={k} style={{ color: "oklch(0.35 0 0)" }}>
-              ★
-            </span>
-          );
-        })}
-        <span className="ml-1 text-xs" style={{ color: "oklch(0.70 0 0)" }}>
-          ({rating.toFixed(1)})
-        </span>
-      </span>
-    );
-  }
-
-  async function handleDiscussChat() {
-    if (!posterInfo) return;
-    setChatLoading(true);
-    const handle = posterInfo.telegram_id?.replace(/^@/, "");
-    if (handle) {
-      const url = `https://t.me/${handle}?text=${encodeURIComponent(`Hi! I am interested in your task: ${task.task_name}`)}`;
-      window.open(url, "_blank", "noopener,noreferrer");
-    } else {
-      alert("Poster hasn't added a Telegram ID yet.");
-    }
-    setChatLoading(false);
-  }
-
-  const catStyle = task.category
-    ? (CATEGORY_STYLES[task.category] ?? CATEGORY_STYLES.Other)
-    : null;
-
-  return (
-    <div
-      data-ocid="task_detail.modal"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 200,
-        background: "oklch(0.05 0 0 / 0.88)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "1rem",
-        backdropFilter: "blur(6px)",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
-    >
-      <div
-        style={{
-          background: "oklch(0.11 0.01 265)",
-          border: "1px solid oklch(0.28 0.012 265)",
-          borderRadius: "1.25rem",
-          width: "100%",
-          maxWidth: "460px",
-          maxHeight: "88vh",
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "0 0 40px oklch(0.40 0.22 295 / 0.15)",
-        }}
-      >
-        {/* Header */}
-        <div
+      {telegramHandle ? (
+        <Button
+          type="button"
+          data-ocid={`tasks.item.${index}.button`}
+          className="w-full mt-1 glow-button purple-gradient border-0 text-white text-xs font-semibold rounded-xl h-9"
+          onClick={() =>
+            window.open(telegramUrl, "_blank", "noopener,noreferrer")
+          }
+        >
+          <Send className="w-3.5 h-3.5 mr-2" />
+          Discuss on Telegram
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          data-ocid={`tasks.item.${index}.button`}
+          disabled
+          className="w-full mt-1 rounded-xl h-9 text-xs font-semibold"
           style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            padding: "1.25rem 1.25rem 0",
+            background: "oklch(0.22 0.01 265)",
+            color: "oklch(0.50 0 0)",
+            border: "1px solid oklch(0.28 0.012 265)",
           }}
         >
-          <div className="flex-1 pr-3">
-            <h2
-              className="text-base font-bold leading-snug"
-              style={{ color: "oklch(0.95 0 0)" }}
-            >
-              {task.task_name}
-            </h2>
-            {catStyle && task.category && (
-              <span
-                className="inline-block mt-1.5 text-xs font-semibold px-2 py-0.5 rounded-full"
-                style={{
-                  background: catStyle.bg,
-                  color: catStyle.color,
-                  border: `1px solid ${catStyle.border}`,
-                }}
-              >
-                {task.category}
-              </span>
-            )}
-          </div>
-          <button
-            type="button"
-            data-ocid="task_detail.close_button"
-            onClick={onClose}
-            style={{
-              background: "oklch(0.20 0.01 265)",
-              border: "1px solid oklch(0.28 0.012 265)",
-              color: "oklch(0.70 0 0)",
-              borderRadius: "0.5rem",
-              padding: "0.25rem 0.5rem",
-              cursor: "pointer",
-              fontSize: "1rem",
-              lineHeight: 1,
-            }}
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* Scrollable body */}
-        <div
-          style={{
-            overflowY: "auto",
-            padding: "1rem 1.25rem 1.25rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-          }}
-        >
-          {/* Task details */}
-          <div
-            style={{
-              background: "oklch(0.14 0.01 265)",
-              border: "1px solid oklch(0.22 0.01 265)",
-              borderRadius: "0.875rem",
-              padding: "0.875rem",
-              display: "flex",
-              flexDirection: "column",
-              gap: "0.625rem",
-            }}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span
-                className="text-xs font-medium"
-                style={{ color: "oklch(0.60 0 0)" }}
-              >
-                Price
-              </span>
-              <span
-                className="text-sm font-bold px-2.5 py-0.5 rounded-full"
-                style={{
-                  background: "oklch(0.45 0.22 295 / 0.2)",
-                  color: "oklch(0.78 0.20 295)",
-                  border: "1px solid oklch(0.50 0.18 295 / 0.4)",
-                }}
-              >
-                ₹{task.price}
-              </span>
-            </div>
-            {task.location && (
-              <div className="flex items-center justify-between gap-2">
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: "oklch(0.60 0 0)" }}
-                >
-                  Location
-                </span>
-                <span className="text-xs" style={{ color: "oklch(0.80 0 0)" }}>
-                  <MapPin className="w-3 h-3 inline mr-1" />
-                  {task.location}
-                </span>
-              </div>
-            )}
-            {task.deadline && (
-              <div className="flex items-center justify-between gap-2">
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: "oklch(0.60 0 0)" }}
-                >
-                  Deadline
-                </span>
-                <span className="text-xs" style={{ color: "oklch(0.80 0 0)" }}>
-                  {task.deadline}
-                </span>
-              </div>
-            )}
-            {task.Description && (
-              <div
-                className="flex flex-col gap-1 pt-1"
-                style={{ borderTop: "1px solid oklch(0.22 0.01 265)" }}
-              >
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: "oklch(0.60 0 0)" }}
-                >
-                  Description
-                </span>
-                <p
-                  className="text-xs leading-relaxed"
-                  style={{ color: "oklch(0.78 0 0)" }}
-                >
-                  {task.Description}
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Poster profile */}
-          <div
-            style={{
-              background: "oklch(0.14 0.01 265)",
-              border: "1px solid oklch(0.22 0.01 265)",
-              borderRadius: "0.875rem",
-              padding: "0.875rem",
-            }}
-          >
-            <p
-              className="text-xs font-semibold mb-3"
-              style={{
-                color: "oklch(0.55 0.10 295)",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-              }}
-            >
-              Poster Profile
-            </p>
-            {posterLoading ? (
-              <div className="flex items-center gap-2 py-2">
-                <Loader2
-                  className="w-4 h-4 animate-spin"
-                  style={{ color: "oklch(0.55 0.10 295)" }}
-                />
-                <span className="text-xs" style={{ color: "oklch(0.55 0 0)" }}>
-                  Loading poster info...
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <div
-                  className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
-                  style={{
-                    background: "oklch(0.45 0.22 295 / 0.25)",
-                    color: "oklch(0.78 0.20 295)",
-                    border: "1px solid oklch(0.50 0.18 295 / 0.35)",
-                  }}
-                >
-                  {posterInfo?.full_name?.charAt(0)?.toUpperCase() ??
-                    task.user_id_origintor?.charAt(0)?.toUpperCase() ??
-                    "?"}
-                </div>
-                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                  <span
-                    className="text-sm font-semibold truncate"
-                    style={{ color: "oklch(0.92 0 0)" }}
-                  >
-                    {posterInfo?.full_name ??
-                      task.user_id_origintor ??
-                      "Unknown"}
-                  </span>
-                  <span
-                    className="text-xs"
-                    style={{ color: "oklch(0.55 0 0)" }}
-                  >
-                    @{posterInfo?.user_id ?? task.user_id_origintor}
-                  </span>
-                  <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                    <span
-                      className="text-xs"
-                      style={{ color: "oklch(0.60 0 0)" }}
-                    >
-                      {avgRating !== null ? (
-                        renderStars(avgRating)
-                      ) : (
-                        <span>Unrated</span>
-                      )}
-                    </span>
-                    <span
-                      className="text-xs px-1.5 py-0.5 rounded"
-                      style={{
-                        background: "oklch(0.20 0.01 265)",
-                        color: "oklch(0.65 0 0)",
-                      }}
-                    >
-                      {posterTasksCount} task{posterTasksCount !== 1 ? "s" : ""}{" "}
-                      posted
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Action buttons */}
-          {isMyTask ? (
-            <div
-              className="text-center text-xs py-2 rounded-xl"
-              style={{
-                background: "oklch(0.17 0.01 265)",
-                color: "oklch(0.50 0 0)",
-                border: "1px solid oklch(0.24 0.01 265)",
-              }}
-            >
-              This is your task
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2.5">
-              <button
-                type="button"
-                data-ocid="task_detail.primary_button"
-                onClick={() => setRequestSent((prev) => !prev)}
-                style={
-                  requestSent
-                    ? {
-                        width: "100%",
-                        padding: "0.625rem 1rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid oklch(0.35 0.10 155 / 0.5)",
-                        cursor: "pointer",
-                        fontSize: "0.8125rem",
-                        fontWeight: 600,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: "0.5rem",
-                        transition: "all 0.2s",
-                        background: "oklch(0.20 0.04 155)",
-                        color: "oklch(0.72 0.16 155)",
-                      }
-                    : {
-                        width: "100%",
-                        padding: "0.625rem 1rem",
-                        borderRadius: "0.75rem",
-                        border: "none",
-                        cursor: "pointer",
-                        fontSize: "0.8125rem",
-                        fontWeight: 600,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: "0.5rem",
-                        transition: "all 0.2s",
-                        background:
-                          "linear-gradient(135deg, oklch(0.55 0.22 295), oklch(0.50 0.24 310))",
-                        color: "#fff",
-                        boxShadow: "0 0 20px oklch(0.45 0.22 295 / 0.35)",
-                      }
-                }
-              >
-                {requestSent ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    Request Sent
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    Send Request
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                data-ocid="task_detail.secondary_button"
-                onClick={handleDiscussChat}
-                disabled={chatLoading || !posterInfo}
-                style={{
-                  width: "100%",
-                  padding: "0.625rem 1rem",
-                  borderRadius: "0.75rem",
-                  background: "transparent",
-                  border: "1px solid oklch(0.45 0.15 295 / 0.5)",
-                  color: "oklch(0.72 0.15 295)",
-                  cursor: "pointer",
-                  fontSize: "0.8125rem",
-                  fontWeight: 600,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "0.5rem",
-                  transition: "all 0.2s",
-                  opacity: chatLoading || !posterInfo ? 0.6 : 1,
-                }}
-              >
-                {chatLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <MessageCircle className="w-4 h-4" />
-                )}
-                Discuss on Chat
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+          No Contact Info
+        </Button>
+      )}
+    </article>
   );
 }
 
@@ -1126,6 +622,7 @@ function CreateAccountForm({ onAuth }: { onAuth: (userId: string) => void }) {
         setStatus("error");
         return;
       }
+      const hash = await sha256(fields.password);
       await createUser({
         user_id: fields.username,
         full_name: fields.fullName,
@@ -1135,7 +632,7 @@ function CreateAccountForm({ onAuth }: { onAuth: (userId: string) => void }) {
         upi_id: fields.upiId,
         upi_type: fields.upiPlatform,
         student_id: fields.studentId,
-        password_hash: fields.password,
+        password_hash: hash,
       });
       localStorage.setItem("proxii_user_id", fields.username);
       onAuth(fields.username);
@@ -1426,7 +923,8 @@ function LoginForm({ onAuth }: { onAuth: (userId: string) => void }) {
     setStatus("sending");
     setErrorMsg("");
     try {
-      const user = await loginUser(fields.username, fields.password);
+      const hash = await sha256(fields.password);
+      const user = await loginUser(fields.username, hash);
       if (!user) {
         setErrorMsg("Invalid username or password.");
         setStatus("error");
@@ -1603,10 +1101,7 @@ function WelcomeScreen({ onAuth }: { onAuth: (userId: string) => void }) {
 }
 
 // ── Post Task Screen ──────────────────────────────────────────────────────────
-function PostTaskScreen({
-  onGoToExplore,
-  onTaskPosted,
-}: { onGoToExplore: () => void; onTaskPosted?: (task: LiveTask) => void }) {
+function PostTaskScreen({ onGoToExplore }: { onGoToExplore: () => void }) {
   const emptyPost = {
     title: "",
     category: "",
@@ -1646,19 +1141,6 @@ function PostTaskScreen({
         Description: fields.description,
         category: fields.category,
       });
-      const newTask: LiveTask = {
-        task_id: `task_${randStr}`,
-        task_name: fields.title,
-        price: fields.price,
-        location: fields.location,
-        Description: fields.description,
-        telegram_id: "",
-        status: "active",
-        deadline: fields.deadline,
-        category: fields.category,
-        user_id_origintor: userId,
-      };
-      onTaskPosted?.(newTask);
       setLastTask(fields);
       setStatus("success");
       setTimeout(() => {
@@ -1979,12 +1461,6 @@ function ProfileScreen({
   const [saveStatus, setSaveStatus] = useState<Status>("idle");
   const [saveError, setSaveError] = useState("");
   const cachedRef = useRef<UserRow | null>(null);
-  const [taskHistory, setTaskHistory] = useState<TaskHistory[]>([]);
-  const [allTasks, setAllTasks] = useState<LiveTask[]>([]);
-  const [activeModal, setActiveModal] = useState<
-    "posted" | "completed" | "earned" | null
-  >(null);
-  const [statsLoading, setStatsLoading] = useState(false);
 
   useEffect(() => {
     // Use cached data if available
@@ -2006,17 +1482,6 @@ function ProfileScreen({
       .catch(() => setFetchError("Failed to load profile. Please try again."))
       .finally(() => setLoading(false));
   }, [userId, onLogout]);
-
-  useEffect(() => {
-    if (!userId) return;
-    setStatsLoading(true);
-    Promise.all([fetchTasks(), fetchTaskHistory()])
-      .then(([tasks, history]) => {
-        setAllTasks(tasks);
-        setTaskHistory(history);
-      })
-      .finally(() => setStatsLoading(false));
-  }, [userId]);
 
   function isProfileComplete(row: UserRow) {
     return !!(row.telegram_id || row.phone_number);
@@ -2070,65 +1535,6 @@ function ProfileScreen({
       setSaveStatus("error");
     }
   }
-
-  const postedTasks = [
-    ...allTasks.filter((t) => t.user_id_origintor === userId),
-    ...taskHistory.filter((t) => t.user_id_origintor === userId),
-  ];
-  const postedTasksDeduped = Array.from(
-    new Map(postedTasks.map((t) => [t.task_id, t])).values(),
-  );
-
-  const completedTasks = taskHistory.filter((t) => t.worker_id === userId);
-  const paidOutTasks = taskHistory.filter(
-    (t) => t.worker_id === userId && t.payment_status === "Paid Out",
-  );
-  const totalEarned = paidOutTasks.reduce(
-    (sum, t) => sum + (Number.parseFloat(t.price) || 0),
-    0,
-  );
-
-  const ratings = taskHistory
-    .filter(
-      (t) =>
-        t.worker_id === userId &&
-        t.rating_score &&
-        !Number.isNaN(Number.parseFloat(t.rating_score)),
-    )
-    .map((t) => Number.parseFloat(t.rating_score));
-  const avgRating =
-    ratings.length > 0
-      ? ratings.reduce((a, b) => a + b, 0) / ratings.length
-      : null;
-
-  function renderStars(rating: number): string {
-    const full = Math.floor(rating);
-    const half = rating - full >= 0.25 ? 1 : 0;
-    return `${"⭐".repeat(full)}${half ? "✨" : ""} ${rating.toFixed(1)}`;
-  }
-
-  const modalOverlay: React.CSSProperties = {
-    position: "fixed",
-    inset: 0,
-    zIndex: 100,
-    background: "oklch(0.05 0 0 / 0.85)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "1rem",
-  };
-  const modalCard: React.CSSProperties = {
-    background: "oklch(0.14 0.01 265)",
-    border: "1px solid oklch(0.28 0.012 265)",
-    borderRadius: "1.25rem",
-    padding: "1.5rem",
-    width: "100%",
-    maxWidth: "420px",
-    maxHeight: "80vh",
-    display: "flex",
-    flexDirection: "column",
-    gap: "1rem",
-  };
 
   const displayName = userRow?.full_name || "";
   const initials = displayName
@@ -2558,277 +1964,24 @@ function ProfileScreen({
             border: "1px solid oklch(0.24 0.012 265)",
           }}
         >
-          {statsLoading && (
-            <p className="text-xs text-muted-foreground text-center py-2">
-              Loading stats...
-            </p>
-          )}
-          {[
-            {
-              label: "Tasks Posted",
-              value: String(postedTasksDeduped.length),
-              modal: "posted" as const,
-            },
-            {
-              label: "Tasks Completed",
-              value: String(completedTasks.length),
-              modal: "completed" as const,
-            },
-            {
-              label: "Total Earned",
-              value: `₹${totalEarned.toFixed(0)}`,
-              modal: "earned" as const,
-            },
-          ].map(({ label, value, modal }) => (
-            <button
-              type="button"
+          {(
+            [
+              ["Tasks Posted", "0"],
+              ["Tasks Completed", "0"],
+              ["Total Earned", "₹0"],
+              ["Rating", "—"],
+            ] as [string, string][]
+          ).map(([label, value]) => (
+            <div
               key={label}
-              data-ocid={`profile.${modal}.button`}
-              onClick={() => setActiveModal(modal)}
-              className="flex justify-between py-2 border-b border-border w-full text-left transition-colors hover:bg-white/5 rounded-lg px-1"
-              style={{ cursor: "pointer" }}
+              className="flex justify-between py-2 border-b border-border last:border-0"
             >
               <span className="text-sm text-muted-foreground">{label}</span>
-              <span
-                className="text-sm font-bold"
-                style={{ color: "oklch(0.78 0.20 295)" }}
-              >
-                {value}
-              </span>
-            </button>
+              <span className="text-sm font-bold">{value}</span>
+            </div>
           ))}
-          <div className="flex justify-between py-2 px-1">
-            <span className="text-sm text-muted-foreground">Rating</span>
-            <span className="text-sm font-bold">
-              {avgRating !== null ? renderStars(avgRating) : "Unrated"}
-            </span>
-          </div>
         </div>
       </div>
-
-      {/* My Posted Tasks Modal */}
-      {activeModal === "posted" && (
-        <div
-          style={modalOverlay}
-          onClick={() => setActiveModal(null)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setActiveModal(null);
-          }}
-          role="presentation"
-        >
-          <div
-            style={modalCard}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            aria-modal="true"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-foreground">
-                My Posted Tasks
-              </h3>
-              <button
-                type="button"
-                data-ocid="profile.posted.close_button"
-                onClick={() => setActiveModal(null)}
-                className="text-muted-foreground hover:text-foreground p-1"
-              >
-                ✕
-              </button>
-            </div>
-            <div
-              className="overflow-y-auto flex-1 space-y-2 pr-1"
-              style={{ maxHeight: "55vh" }}
-            >
-              {postedTasksDeduped.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-6">
-                  No tasks found yet. Start by posting one!
-                </p>
-              ) : (
-                postedTasksDeduped.map((t, i) => (
-                  <div
-                    key={t.task_id || i}
-                    data-ocid={`profile.posted.item.${i + 1}`}
-                    className="rounded-xl p-3 space-y-1"
-                    style={{
-                      background: "oklch(0.18 0.01 265)",
-                      border: "1px solid oklch(0.28 0.012 265)",
-                    }}
-                  >
-                    <div className="flex justify-between">
-                      <span className="text-sm font-semibold text-foreground">
-                        {t.task_name}
-                      </span>
-                      <span
-                        className="text-xs font-bold"
-                        style={{ color: "oklch(0.78 0.20 295)" }}
-                      >
-                        ₹{t.price}
-                      </span>
-                    </div>
-                    <span
-                      className="text-xs px-2 py-0.5 rounded-full inline-block"
-                      style={{
-                        background: "oklch(0.22 0.05 265 / 0.4)",
-                        color: "oklch(0.70 0.05 265)",
-                      }}
-                    >
-                      {t.status || "Active"}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Earnings History Modal */}
-      {activeModal === "completed" && (
-        <div
-          style={modalOverlay}
-          onClick={() => setActiveModal(null)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setActiveModal(null);
-          }}
-          role="presentation"
-        >
-          <div
-            style={modalCard}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            aria-modal="true"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-foreground">
-                Earnings History
-              </h3>
-              <button
-                type="button"
-                data-ocid="profile.completed.close_button"
-                onClick={() => setActiveModal(null)}
-                className="text-muted-foreground hover:text-foreground p-1"
-              >
-                ✕
-              </button>
-            </div>
-            <div
-              className="overflow-y-auto flex-1 space-y-2 pr-1"
-              style={{ maxHeight: "55vh" }}
-            >
-              {completedTasks.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-6">
-                  No completed tasks yet. Help someone out!
-                </p>
-              ) : (
-                completedTasks.map((t, i) => (
-                  <div
-                    key={t.task_id || i}
-                    data-ocid={`profile.completed.item.${i + 1}`}
-                    className="rounded-xl p-3 space-y-1"
-                    style={{
-                      background: "oklch(0.18 0.01 265)",
-                      border: "1px solid oklch(0.28 0.012 265)",
-                    }}
-                  >
-                    <span className="text-sm font-semibold text-foreground">
-                      {t.task_name}
-                    </span>
-                    <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>{t.completion_date || "—"}</span>
-                      <span
-                        style={{
-                          color:
-                            t.payment_status === "Paid Out"
-                              ? "oklch(0.68 0.18 145)"
-                              : "oklch(0.65 0 0)",
-                        }}
-                      >
-                        {t.payment_status || "Pending"}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Total Earned Modal */}
-      {activeModal === "earned" && (
-        <div
-          style={modalOverlay}
-          onClick={() => setActiveModal(null)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setActiveModal(null);
-          }}
-          role="presentation"
-        >
-          <div
-            style={modalCard}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            aria-modal="true"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-foreground">
-                Total Earned
-              </h3>
-              <button
-                type="button"
-                data-ocid="profile.earned.close_button"
-                onClick={() => setActiveModal(null)}
-                className="text-muted-foreground hover:text-foreground p-1"
-              >
-                ✕
-              </button>
-            </div>
-            <div
-              className="overflow-y-auto flex-1 space-y-2 pr-1"
-              style={{ maxHeight: "50vh" }}
-            >
-              {paidOutTasks.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-6">
-                  No paid out tasks yet.
-                </p>
-              ) : (
-                paidOutTasks.map((t, i) => (
-                  <div
-                    key={t.task_id || i}
-                    data-ocid={`profile.earned.item.${i + 1}`}
-                    className="rounded-xl p-3 flex justify-between items-center"
-                    style={{
-                      background: "oklch(0.18 0.01 265)",
-                      border: "1px solid oklch(0.28 0.012 265)",
-                    }}
-                  >
-                    <span className="text-sm text-foreground">
-                      {t.task_name}
-                    </span>
-                    <span
-                      className="text-sm font-bold"
-                      style={{ color: "oklch(0.68 0.18 145)" }}
-                    >
-                      ₹{t.price}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="flex justify-between items-center pt-2 border-t border-border">
-              <span className="text-sm font-semibold text-muted-foreground">
-                Total
-              </span>
-              <span
-                className="text-base font-extrabold"
-                style={{ color: "oklch(0.68 0.18 145)" }}
-              >
-                ₹{totalEarned.toFixed(0)}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
     </main>
   );
 }
@@ -2908,14 +2061,7 @@ function ExploreScreen({
   tasks,
   loading,
   fetchError,
-  currentUserId,
-}: {
-  tasks: LiveTask[];
-  loading: boolean;
-  fetchError: string;
-  currentUserId: string | null;
-}) {
-  const [selectedTask, setSelectedTask] = useState<LiveTask | null>(null);
+}: { tasks: LiveTask[]; loading: boolean; fetchError: string }) {
   return (
     <main className="flex-1">
       <HeroSection onExplore={() => {}} />
@@ -2965,19 +2111,9 @@ function ExploreScreen({
                 key={task.task_id || i}
                 task={task}
                 index={i + 1}
-                currentUserId={currentUserId}
-                onOpen={(t) => setSelectedTask(t)}
               />
             ))}
           </div>
-        )}
-        {selectedTask && (
-          <TaskDetailModal
-            task={selectedTask}
-            currentUserId={currentUserId}
-            allTasks={tasks}
-            onClose={() => setSelectedTask(null)}
-          />
         )}
       </section>
       <WhyProxiiSection />
@@ -3065,14 +2201,10 @@ export default function App() {
             tasks={tasks}
             loading={tasksLoading}
             fetchError={fetchError}
-            currentUserId={userId}
           />
         )}
         {activeTab === "post" && (
-          <PostTaskScreen
-            onGoToExplore={() => handleTabChange("explore")}
-            onTaskPosted={(task) => setTasks((prev) => [task, ...prev])}
-          />
+          <PostTaskScreen onGoToExplore={() => handleTabChange("explore")} />
         )}
         {activeTab === "profile" && (
           <ProfileScreen
