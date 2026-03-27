@@ -40,6 +40,9 @@ interface LiveTask {
   deadline: string;
   category?: string;
   user_id_origintor?: string;
+  applicants?: string;
+  worker_id?: string;
+  payment_status?: string;
 }
 
 interface UserRow {
@@ -161,6 +164,18 @@ async function patchUser(userId: string, data: object) {
     },
   );
   if (!res.ok) throw new Error("Failed to update profile");
+}
+
+async function patchTask(taskId: string, data: object) {
+  const res = await fetch(
+    `${SHEETDB}/task_id/${encodeURIComponent(taskId)}?sheet=task`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sheet: "task", data }),
+    },
+  );
+  if (!res.ok) throw new Error("Failed to update task");
 }
 
 // ── Design constants ─────────────────────────────────────────────────────────
@@ -552,7 +567,14 @@ function TaskDetailModal({
   const [posterInfo, setPosterInfo] = useState<UserRow | null>(null);
   const [posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
   const [posterLoading, setPosterLoading] = useState(true);
-  const [requestSent, setRequestSent] = useState(false);
+  const [requestSent, setRequestSent] = useState(() => {
+    if (!currentUserId || !task.applicants) return false;
+    return task.applicants
+      .split(",")
+      .map((s) => s.trim())
+      .includes(currentUserId);
+  });
+  const [requestLoading, setRequestLoading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const isMyTask = currentUserId && task.user_id_origintor === currentUserId;
 
@@ -908,7 +930,36 @@ function TaskDetailModal({
               <button
                 type="button"
                 data-ocid="task_detail.primary_button"
-                onClick={() => setRequestSent((prev) => !prev)}
+                disabled={requestLoading}
+                onClick={async () => {
+                  if (!currentUserId) return;
+                  if (!requestSent) {
+                    setRequestLoading(true);
+                    try {
+                      const existing = task.applicants
+                        ? task.applicants.trim()
+                        : "";
+                      const ids = existing
+                        ? existing.split(",").map((s) => s.trim())
+                        : [];
+                      if (!ids.includes(currentUserId)) {
+                        ids.push(currentUserId);
+                      }
+                      const newApplicants = ids.join(",");
+                      await patchTask(task.task_id, {
+                        applicants: newApplicants,
+                      });
+                      task.applicants = newApplicants;
+                      setRequestSent(true);
+                    } catch {
+                      // ignore
+                    } finally {
+                      setRequestLoading(false);
+                    }
+                  } else {
+                    setRequestSent(false);
+                  }
+                }}
                 style={
                   requestSent
                     ? {
@@ -947,10 +998,12 @@ function TaskDetailModal({
                       }
                 }
               >
-                {requestSent ? (
+                {requestLoading ? (
+                  <span style={{ opacity: 0.7 }}>Sending...</span>
+                ) : requestSent ? (
                   <>
                     <CheckCircle2 className="w-4 h-4" />
-                    Request Sent
+                    Request Sent ✓
                   </>
                 ) : (
                   <>
@@ -1954,6 +2007,146 @@ function PostTaskScreen({
 }
 
 // ── Profile Screen ────────────────────────────────────────────────────────────
+
+function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
+  const [selectedPerformer, setSelectedPerformer] = useState<string | null>(
+    null,
+  );
+  const [selectingId, setSelectingId] = useState<string | null>(null);
+  const [successId, setSuccessId] = useState<string | null>(null);
+
+  const applicantList = task.applicants
+    ? task.applicants
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+
+  async function handleSelect(applicantId: string) {
+    setSelectingId(applicantId);
+    try {
+      await patchTask(task.task_id, {
+        worker_id: applicantId,
+        status: "Awaiting Payment",
+      });
+      setSuccessId(applicantId);
+      setSelectedPerformer(applicantId);
+    } catch {
+      // ignore
+    } finally {
+      setSelectingId(null);
+    }
+  }
+
+  return (
+    <div
+      data-ocid={`profile.posted.item.${index + 1}`}
+      className="rounded-xl p-3 space-y-2"
+      style={{
+        background: "oklch(0.18 0.01 265)",
+        border: "1px solid oklch(0.28 0.012 265)",
+      }}
+    >
+      <div className="flex justify-between">
+        <span className="text-sm font-semibold text-foreground">
+          {task.task_name}
+        </span>
+        <span
+          className="text-xs font-bold"
+          style={{ color: "oklch(0.78 0.20 295)" }}
+        >
+          ₹{task.price}
+        </span>
+      </div>
+      <span
+        className="text-xs px-2 py-0.5 rounded-full inline-block"
+        style={{
+          background: "oklch(0.22 0.05 265 / 0.4)",
+          color: "oklch(0.70 0.05 265)",
+        }}
+      >
+        {task.status || "Active"}
+      </span>
+
+      {/* Applicants section */}
+      <div className="pt-1">
+        <span
+          className="text-xs font-semibold"
+          style={{ color: "oklch(0.60 0.10 295)" }}
+        >
+          Applicants
+        </span>
+        {applicantList.length === 0 ? (
+          <p className="text-xs text-muted-foreground mt-1">
+            No applicants yet
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1.5 mt-1.5">
+            {applicantList.map((applicantId) => (
+              <div
+                key={applicantId}
+                className="flex items-center justify-between rounded-lg px-2 py-1.5"
+                style={{
+                  background: "oklch(0.15 0.01 265)",
+                  border: "1px solid oklch(0.26 0.012 265)",
+                }}
+              >
+                <span
+                  className="text-xs font-medium"
+                  style={{ color: "oklch(0.72 0.15 295)" }}
+                >
+                  @{applicantId}
+                </span>
+                {successId === applicantId ||
+                selectedPerformer === applicantId ||
+                task.worker_id === applicantId ? (
+                  <span
+                    className="text-xs font-bold px-2 py-0.5 rounded-full"
+                    style={{
+                      color: "oklch(0.72 0.18 150)",
+                      background: "oklch(0.18 0.05 150 / 0.3)",
+                    }}
+                  >
+                    ✓ Selected
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={
+                      selectingId === applicantId ||
+                      !!task.worker_id ||
+                      !!selectedPerformer
+                    }
+                    onClick={() => handleSelect(applicantId)}
+                    className="text-xs px-2 py-0.5 rounded-full transition-all"
+                    style={{
+                      border: "1px solid oklch(0.45 0.18 295 / 0.6)",
+                      color: "oklch(0.72 0.15 295)",
+                      background: "transparent",
+                      cursor:
+                        selectingId === applicantId ||
+                        !!task.worker_id ||
+                        !!selectedPerformer
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        !!task.worker_id || !!selectedPerformer ? 0.4 : 1,
+                    }}
+                  >
+                    {selectingId === applicantId
+                      ? "Selecting..."
+                      : "Select as Performer"}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ProfileScreen({
   userId,
   onLogout,
@@ -2645,36 +2838,11 @@ function ProfileScreen({
                 </p>
               ) : (
                 postedTasksDeduped.map((t, i) => (
-                  <div
+                  <PostedTaskCard
                     key={t.task_id || i}
-                    data-ocid={`profile.posted.item.${i + 1}`}
-                    className="rounded-xl p-3 space-y-1"
-                    style={{
-                      background: "oklch(0.18 0.01 265)",
-                      border: "1px solid oklch(0.28 0.012 265)",
-                    }}
-                  >
-                    <div className="flex justify-between">
-                      <span className="text-sm font-semibold text-foreground">
-                        {t.task_name}
-                      </span>
-                      <span
-                        className="text-xs font-bold"
-                        style={{ color: "oklch(0.78 0.20 295)" }}
-                      >
-                        ₹{t.price}
-                      </span>
-                    </div>
-                    <span
-                      className="text-xs px-2 py-0.5 rounded-full inline-block"
-                      style={{
-                        background: "oklch(0.22 0.05 265 / 0.4)",
-                        color: "oklch(0.70 0.05 265)",
-                      }}
-                    >
-                      {t.status || "Active"}
-                    </span>
-                  </div>
+                    task={t as LiveTask}
+                    index={i}
+                  />
                 ))
               )}
             </div>
