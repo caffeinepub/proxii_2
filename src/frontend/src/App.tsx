@@ -68,6 +68,12 @@ interface TaskHistory {
   rating_score: string;
 }
 
+interface FeedbackRow {
+  task_id: string;
+  worker_id: string;
+  rating: string;
+}
+
 const SHEETDB = "https://sheetdb.io/api/v1/m2d47h1nseqog";
 
 // ── SheetDB helpers ──────────────────────────────────────────────────────────
@@ -89,6 +95,16 @@ async function fetchTasks(): Promise<LiveTask[]> {
 async function fetchTaskHistory(): Promise<TaskHistory[]> {
   try {
     const res = await fetch(`${SHEETDB}?sheet=task_history`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
+async function fetchFeedback(): Promise<FeedbackRow[]> {
+  try {
+    const res = await fetch(`${SHEETDB}?sheet=feedback`);
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -565,7 +581,8 @@ function TaskDetailModal({
   onClose: () => void;
 }) {
   const [posterInfo, setPosterInfo] = useState<UserRow | null>(null);
-  const [posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
+  const [_posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
+  const [modalFeedbackRows, setModalFeedbackRows] = useState<FeedbackRow[]>([]);
   const [posterLoading, setPosterLoading] = useState(true);
   const [requestSent, setRequestSent] = useState(() => {
     if (!currentUserId || !task.applicants) return false;
@@ -583,14 +600,19 @@ function TaskDetailModal({
       setPosterLoading(false);
       return;
     }
-    Promise.all([fetchUserById(task.user_id_origintor), fetchTaskHistory()])
-      .then(([user, history]) => {
+    Promise.all([
+      fetchUserById(task.user_id_origintor),
+      fetchTaskHistory(),
+      fetchFeedback(),
+    ])
+      .then(([user, history, feedback]) => {
         setPosterInfo(user);
         setPosterHistory(
           history.filter(
             (h) => h.worker_id === (user?.user_id ?? task.user_id_origintor),
           ),
         );
+        setModalFeedbackRows(feedback);
       })
       .catch(() => {})
       .finally(() => setPosterLoading(false));
@@ -600,9 +622,14 @@ function TaskDetailModal({
     (t) => t.user_id_origintor === task.user_id_origintor,
   ).length;
 
-  const ratings = posterHistory
-    .map((h) => Number.parseFloat(h.rating_score))
-    .filter((n) => !Number.isNaN(n));
+  const ratings = modalFeedbackRows
+    .filter(
+      (r) =>
+        r.worker_id === (posterInfo?.user_id ?? task.user_id_origintor) &&
+        r.rating &&
+        !Number.isNaN(Number.parseFloat(r.rating)),
+    )
+    .map((r) => Number.parseFloat(r.rating));
   const avgRating =
     ratings.length > 0
       ? ratings.reduce((a, b) => a + b, 0) / ratings.length
@@ -963,7 +990,28 @@ function TaskDetailModal({
                       setRequestLoading(false);
                     }
                   } else {
-                    setRequestSent(false);
+                    setRequestLoading(true);
+                    try {
+                      const existing = task.applicants
+                        ? task.applicants.trim()
+                        : "";
+                      const ids = existing
+                        ? existing
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter((id) => id !== currentUserId)
+                        : [];
+                      const newApplicants = ids.join(",");
+                      await patchTask(task.task_id, {
+                        applicants: newApplicants,
+                      });
+                      task.applicants = newApplicants;
+                      setRequestSent(false);
+                    } catch {
+                      // ignore
+                    } finally {
+                      setRequestLoading(false);
+                    }
                   }
                 }}
                 style={
@@ -2020,6 +2068,7 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
   );
   const [selectingId, setSelectingId] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
   const applicantList = task.applicants
     ? task.applicants
@@ -2115,33 +2164,60 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
                   >
                     ✓ Selected
                   </span>
+                ) : acceptingId === applicantId ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAcceptingId(null)}
+                      className="text-xs px-2 py-0.5 rounded-full"
+                      style={{
+                        color: "oklch(0.55 0 0)",
+                        background: "transparent",
+                        border: "1px solid oklch(0.30 0 0)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectingId === applicantId}
+                      onClick={() => handleSelect(applicantId)}
+                      className="text-xs px-2 py-0.5 rounded-full transition-all"
+                      style={{
+                        border: "1px solid oklch(0.45 0.18 145 / 0.7)",
+                        color: "oklch(0.72 0.18 145)",
+                        background: "oklch(0.18 0.05 145 / 0.2)",
+                        cursor:
+                          selectingId === applicantId
+                            ? "not-allowed"
+                            : "pointer",
+                      }}
+                    >
+                      {selectingId === applicantId
+                        ? "Confirming..."
+                        : "✓ Confirm"}
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
-                    disabled={
-                      selectingId === applicantId ||
-                      !!task.worker_id ||
-                      !!selectedPerformer
-                    }
-                    onClick={() => handleSelect(applicantId)}
+                    disabled={!!task.worker_id || !!selectedPerformer}
+                    onClick={() => setAcceptingId(applicantId)}
                     className="text-xs px-2 py-0.5 rounded-full transition-all"
                     style={{
                       border: "1px solid oklch(0.45 0.18 295 / 0.6)",
                       color: "oklch(0.72 0.15 295)",
                       background: "transparent",
                       cursor:
-                        selectingId === applicantId ||
-                        !!task.worker_id ||
-                        !!selectedPerformer
+                        !!task.worker_id || !!selectedPerformer
                           ? "not-allowed"
                           : "pointer",
                       opacity:
                         !!task.worker_id || !!selectedPerformer ? 0.4 : 1,
                     }}
                   >
-                    {selectingId === applicantId
-                      ? "Selecting..."
-                      : "Select as Performer"}
+                    Accept
                   </button>
                 )}
               </div>
@@ -2180,6 +2256,7 @@ function ProfileScreen({
   const cachedRef = useRef<UserRow | null>(null);
   const [taskHistory, setTaskHistory] = useState<TaskHistory[]>([]);
   const [allTasks, setAllTasks] = useState<LiveTask[]>([]);
+  const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
   const [activeModal, setActiveModal] = useState<
     "posted" | "completed" | "earned" | null
   >(null);
@@ -2209,10 +2286,11 @@ function ProfileScreen({
   useEffect(() => {
     if (!userId) return;
     setStatsLoading(true);
-    Promise.all([fetchTasks(), fetchTaskHistory()])
-      .then(([tasks, history]) => {
+    Promise.all([fetchTasks(), fetchTaskHistory(), fetchFeedback()])
+      .then(([tasks, history, feedback]) => {
         setAllTasks(tasks);
         setTaskHistory(history);
+        setFeedbackRows(feedback);
       })
       .finally(() => setStatsLoading(false));
   }, [userId]);
@@ -2287,14 +2365,14 @@ function ProfileScreen({
     0,
   );
 
-  const ratings = taskHistory
+  const ratings = feedbackRows
     .filter(
-      (t) =>
-        t.worker_id === userId &&
-        t.rating_score &&
-        !Number.isNaN(Number.parseFloat(t.rating_score)),
+      (r) =>
+        r.worker_id === userId &&
+        r.rating &&
+        !Number.isNaN(Number.parseFloat(r.rating)),
     )
-    .map((t) => Number.parseFloat(t.rating_score));
+    .map((r) => Number.parseFloat(r.rating));
   const avgRating =
     ratings.length > 0
       ? ratings.reduce((a, b) => a + b, 0) / ratings.length
@@ -2748,6 +2826,169 @@ function ProfileScreen({
             </div>
           </form>
         )}
+
+        {/* My Activity */}
+        {(() => {
+          const activeAsHiring = allTasks.filter(
+            (t) => t.user_id_origintor === userId && t.status !== "Completed",
+          );
+          const activeAsWorking = allTasks.filter(
+            (t) => t.worker_id === userId && t.status !== "Completed",
+          );
+          const activeApplied = allTasks.filter(
+            (t) =>
+              t.user_id_origintor !== userId &&
+              !t.worker_id &&
+              t.applicants
+                ?.split(",")
+                .map((s) => s.trim())
+                .includes(userId),
+          );
+          const activityMap = new Map<
+            string,
+            { task: LiveTask; role: "Hiring" | "Working" | "Applied" }
+          >();
+          for (const t of activeAsHiring)
+            activityMap.set(t.task_id, { task: t, role: "Hiring" });
+          for (const t of activeAsWorking)
+            activityMap.set(t.task_id, { task: t, role: "Working" });
+          for (const t of activeApplied) {
+            if (!activityMap.has(t.task_id))
+              activityMap.set(t.task_id, { task: t, role: "Applied" });
+          }
+          const myActivity = Array.from(activityMap.values());
+          return (
+            <div
+              className="w-full rounded-2xl p-4 mt-5"
+              style={{
+                background: "oklch(0.16 0.01 265)",
+                border: "1px solid oklch(0.24 0.012 265)",
+              }}
+            >
+              <p
+                className="text-xs uppercase tracking-widest font-semibold mb-3"
+                style={{ color: "oklch(0.60 0.18 295)" }}
+              >
+                My Activity
+              </p>
+              {statsLoading ? (
+                <p className="text-xs text-muted-foreground text-center py-2">
+                  Loading...
+                </p>
+              ) : myActivity.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-3">
+                  No active tasks. Check the Explore Hub to find work!
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {myActivity.map(({ task, role }) => {
+                    const badgeStyle =
+                      role === "Hiring"
+                        ? {
+                            bg: "oklch(0.30 0.12 295 / 0.3)",
+                            color: "oklch(0.75 0.18 295)",
+                            border: "1px solid oklch(0.45 0.15 295 / 0.5)",
+                          }
+                        : role === "Working"
+                          ? {
+                              bg: "oklch(0.25 0.12 145 / 0.3)",
+                              color: "oklch(0.68 0.18 145)",
+                              border: "1px solid oklch(0.40 0.15 145 / 0.5)",
+                            }
+                          : {
+                              bg: "oklch(0.28 0.10 75 / 0.3)",
+                              color: "oklch(0.75 0.15 75)",
+                              border: "1px solid oklch(0.45 0.12 75 / 0.5)",
+                            };
+                    return (
+                      <div
+                        key={task.task_id}
+                        data-ocid={`activity.${task.task_id}.card`}
+                        className="rounded-xl p-3 flex items-start justify-between gap-2"
+                        style={{
+                          background: "oklch(0.18 0.01 265)",
+                          border: "1px solid oklch(0.26 0.012 265)",
+                        }}
+                      >
+                        <div className="flex flex-col gap-1 flex-1 min-w-0">
+                          <span className="text-sm font-semibold text-foreground truncate">
+                            {task.task_name}
+                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className="text-xs"
+                              style={{ color: "oklch(0.65 0 0)" }}
+                            >
+                              ₹{task.price}
+                            </span>
+                            <span
+                              className="text-xs px-2 py-0.5 rounded-full"
+                              style={{
+                                background: badgeStyle.bg,
+                                color: badgeStyle.color,
+                                border: badgeStyle.border,
+                              }}
+                            >
+                              {role}
+                            </span>
+                            <span
+                              className="text-xs px-1.5 py-0.5 rounded"
+                              style={{
+                                background: "oklch(0.20 0.01 265)",
+                                color: "oklch(0.60 0 0)",
+                              }}
+                            >
+                              {task.status || "Active"}
+                            </span>
+                          </div>
+                          {role === "Hiring" && (
+                            <span
+                              className="text-xs"
+                              style={{ color: "oklch(0.55 0.05 295)" }}
+                            >
+                              {!task.applicants ||
+                              task.applicants.split(",").filter(Boolean)
+                                .length === 0
+                                ? "Waiting for Applicants"
+                                : !task.worker_id
+                                  ? `${task.applicants.split(",").filter((s) => s.trim()).length} Applicant(s) Found`
+                                  : `Performer: @${task.worker_id}`}
+                            </span>
+                          )}
+                          {role === "Working" && (
+                            <span
+                              className="text-xs"
+                              style={{
+                                color:
+                                  task.payment_status === "Held by Admin"
+                                    ? "oklch(0.68 0.18 145)"
+                                    : "oklch(0.55 0 0)",
+                              }}
+                            >
+                              {task.payment_status === "Held by Admin"
+                                ? "✅ Start Working!"
+                                : task.payment_status === "Pending"
+                                  ? "Awaiting Admin Verification..."
+                                  : task.status}
+                            </span>
+                          )}
+                          {role === "Applied" && (
+                            <span
+                              className="text-xs"
+                              style={{ color: "oklch(0.55 0 0)" }}
+                            >
+                              Request sent — waiting for poster
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Stats */}
         <div
