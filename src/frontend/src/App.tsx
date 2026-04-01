@@ -2885,15 +2885,15 @@ function ProfileScreen({
                     const badgeStyle =
                       role === "Hiring"
                         ? {
-                            bg: "oklch(0.30 0.12 295 / 0.3)",
-                            color: "oklch(0.75 0.18 295)",
-                            border: "1px solid oklch(0.45 0.15 295 / 0.5)",
+                            bg: "oklch(0.32 0.20 30 / 0.35)",
+                            color: "oklch(0.85 0.22 30)",
+                            border: "1px solid oklch(0.55 0.20 30 / 0.6)",
                           }
                         : role === "Working"
                           ? {
-                              bg: "oklch(0.25 0.12 145 / 0.3)",
-                              color: "oklch(0.68 0.18 145)",
-                              border: "1px solid oklch(0.40 0.15 145 / 0.5)",
+                              bg: "oklch(0.28 0.18 165 / 0.35)",
+                              color: "oklch(0.78 0.22 165)",
+                              border: "1px solid oklch(0.50 0.18 165 / 0.6)",
                             }
                           : {
                               bg: "oklch(0.28 0.10 75 / 0.3)",
