@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2,
@@ -24,6 +25,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 type Tab = "explore" | "post" | "profile";
 type Status = "idle" | "sending" | "success" | "error";
@@ -966,52 +968,46 @@ function TaskDetailModal({
                 disabled={requestLoading}
                 onClick={async () => {
                   if (!currentUserId) return;
-                  if (!requestSent) {
-                    setRequestLoading(true);
-                    try {
-                      const existing = task.applicants
-                        ? task.applicants.trim()
-                        : "";
-                      const ids = existing
-                        ? existing.split(",").map((s) => s.trim())
-                        : [];
-                      if (!ids.includes(currentUserId)) {
-                        ids.push(currentUserId);
+                  // Optimistic UI update immediately
+                  const prevSent = requestSent;
+                  setRequestSent(!requestSent);
+                  setRequestLoading(true);
+                  try {
+                    const existing = (task.applicants ?? "").trim();
+                    if (!prevSent) {
+                      // ADD: contains check first
+                      const alreadyIn = existing
+                        .split(",")
+                        .map((s) => s.trim())
+                        .some((id) => id === currentUserId);
+                      if (!alreadyIn) {
+                        const newApplicants = existing
+                          ? `${existing},${currentUserId}`
+                          : currentUserId;
+                        await patchTask(task.task_id, {
+                          applicants: newApplicants,
+                        });
+                        task.applicants = newApplicants;
                       }
-                      const newApplicants = ids.join(",");
-                      await patchTask(task.task_id, {
-                        applicants: newApplicants,
-                      });
-                      task.applicants = newApplicants;
-                      setRequestSent(true);
-                    } catch {
-                      // ignore
-                    } finally {
-                      setRequestLoading(false);
-                    }
-                  } else {
-                    setRequestLoading(true);
-                    try {
-                      const existing = task.applicants
-                        ? task.applicants.trim()
-                        : "";
+                    } else {
+                      // REMOVE: filter out currentUserId, clean up commas
                       const ids = existing
-                        ? existing
-                            .split(",")
-                            .map((s) => s.trim())
-                            .filter((id) => id !== currentUserId)
-                        : [];
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter((id) => id !== currentUserId);
                       const newApplicants = ids.join(",");
                       await patchTask(task.task_id, {
                         applicants: newApplicants,
                       });
                       task.applicants = newApplicants;
-                      setRequestSent(false);
-                    } catch {
-                      // ignore
-                    } finally {
-                      setRequestLoading(false);
                     }
+                    toast("Request Updated!");
+                  } catch {
+                    // Revert optimistic update on failure
+                    setRequestSent(prevSent);
+                    toast("Failed to update request. Please try again.");
+                  } finally {
+                    setRequestLoading(false);
                   }
                 }}
                 style={
@@ -3499,6 +3495,7 @@ export default function App() {
         )}
       </div>
       <BottomNav active={activeTab} onTabChange={handleTabChange} />
+      <Toaster />
     </div>
   );
 }
