@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2,
@@ -24,6 +25,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 type Tab = "explore" | "post" | "profile";
 type Status = "idle" | "sending" | "success" | "error";
@@ -68,11 +70,34 @@ interface TaskHistory {
   rating_score: string;
 }
 
+interface FeedbackRow {
+  task_id: string;
+  worker_id: string;
+  rating: string;
+}
+
 const SHEETDB = "https://sheetdb.io/api/v1/m2d47h1nseqog";
+const FETCH_TIMEOUT_MS = 12000; // 12 second timeout for all SheetDB calls
+
+// Fetch with timeout to avoid infinite "sending" state on slow/unresponsive API
+async function fetchWithTimeout(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ── SheetDB helpers ──────────────────────────────────────────────────────────
 async function postTask(data: object) {
-  const res = await fetch(SHEETDB, {
+  const res = await fetchWithTimeout(SHEETDB, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sheet: "task", data: [data] }),
@@ -81,14 +106,24 @@ async function postTask(data: object) {
 }
 
 async function fetchTasks(): Promise<LiveTask[]> {
-  const res = await fetch(`${SHEETDB}?sheet=task`);
+  const res = await fetchWithTimeout(`${SHEETDB}?sheet=task`);
   if (!res.ok) throw new Error("Failed to fetch tasks");
   return res.json();
 }
 
 async function fetchTaskHistory(): Promise<TaskHistory[]> {
   try {
-    const res = await fetch(`${SHEETDB}?sheet=task_history`);
+    const res = await fetchWithTimeout(`${SHEETDB}?sheet=task_history`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
+async function fetchFeedback(): Promise<FeedbackRow[]> {
+  try {
+    const res = await fetchWithTimeout(`${SHEETDB}?sheet=feedback`);
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -97,7 +132,7 @@ async function fetchTaskHistory(): Promise<TaskHistory[]> {
 }
 
 async function fetchUserById(userId: string): Promise<UserRow | null> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/search?sheet=users&user_id=${encodeURIComponent(userId)}`,
   );
   if (!res.ok) return null;
@@ -106,7 +141,7 @@ async function fetchUserById(userId: string): Promise<UserRow | null> {
 }
 
 async function checkUserIdUnique(userId: string): Promise<boolean> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/search?sheet=users&user_id=${encodeURIComponent(userId)}`,
   );
   if (!res.ok) return true;
@@ -115,21 +150,17 @@ async function checkUserIdUnique(userId: string): Promise<boolean> {
 }
 
 async function checkEmailUnique(email: string): Promise<boolean> {
-  try {
-    const res = await fetch(
-      `${SHEETDB}/search?sheet=users&email_id=${encodeURIComponent(email)}`,
-    );
-    if (!res.ok) throw new Error("fetch failed");
-    const rows: UserRow[] = await res.json();
-    return rows.length === 0;
-  } catch {
-    // On network error, block submission to prevent duplicate accounts
-    return false;
-  }
+  // On network error, allow submission (don't silently block the user)
+  const res = await fetchWithTimeout(
+    `${SHEETDB}/search?sheet=users&email_id=${encodeURIComponent(email)}`,
+  );
+  if (!res.ok) return true;
+  const rows: UserRow[] = await res.json();
+  return rows.length === 0;
 }
 
 async function createUser(data: object) {
-  const res = await fetch(SHEETDB, {
+  const res = await fetchWithTimeout(SHEETDB, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sheet: "users", data: [data] }),
@@ -142,7 +173,7 @@ async function loginUser(
   passwordHash: string,
 ): Promise<UserRow | null> {
   // Fetch by username only, then verify hash client-side
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/search?sheet=users&user_id=${encodeURIComponent(userId)}`,
   );
   if (!res.ok) return null;
@@ -155,24 +186,24 @@ async function loginUser(
 }
 
 async function patchUser(userId: string, data: object) {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/user_id/${encodeURIComponent(userId)}?sheet=users`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheet: "users", data }),
+      body: JSON.stringify({ data }),
     },
   );
   if (!res.ok) throw new Error("Failed to update profile");
 }
 
 async function patchTask(taskId: string, data: object) {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/task_id/${encodeURIComponent(taskId)}?sheet=task`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheet: "task", data }),
+      body: JSON.stringify({ data }),
     },
   );
   if (!res.ok) throw new Error("Failed to update task");
@@ -558,21 +589,26 @@ function TaskDetailModal({
   currentUserId,
   allTasks,
   onClose,
+  onTaskUpdate,
 }: {
   task: LiveTask;
   currentUserId: string | null;
   allTasks: LiveTask[];
   onClose: () => void;
+  onTaskUpdate?: (updatedApplicants: string) => void;
 }) {
   const [posterInfo, setPosterInfo] = useState<UserRow | null>(null);
-  const [posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
+  const [_posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
+  const [modalFeedbackRows, setModalFeedbackRows] = useState<FeedbackRow[]>([]);
   const [posterLoading, setPosterLoading] = useState(true);
   const [requestSent, setRequestSent] = useState(() => {
     if (!currentUserId || !task.applicants) return false;
-    return task.applicants
+    // Use contains check: look for user_id anywhere in the applicants string
+    const applicantsStr = task.applicants;
+    return applicantsStr
       .split(",")
       .map((s) => s.trim())
-      .includes(currentUserId);
+      .some((id) => id === currentUserId);
   });
   const [requestLoading, setRequestLoading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
@@ -583,14 +619,19 @@ function TaskDetailModal({
       setPosterLoading(false);
       return;
     }
-    Promise.all([fetchUserById(task.user_id_origintor), fetchTaskHistory()])
-      .then(([user, history]) => {
+    Promise.all([
+      fetchUserById(task.user_id_origintor),
+      fetchTaskHistory(),
+      fetchFeedback(),
+    ])
+      .then(([user, history, feedback]) => {
         setPosterInfo(user);
         setPosterHistory(
           history.filter(
             (h) => h.worker_id === (user?.user_id ?? task.user_id_origintor),
           ),
         );
+        setModalFeedbackRows(feedback);
       })
       .catch(() => {})
       .finally(() => setPosterLoading(false));
@@ -600,9 +641,14 @@ function TaskDetailModal({
     (t) => t.user_id_origintor === task.user_id_origintor,
   ).length;
 
-  const ratings = posterHistory
-    .map((h) => Number.parseFloat(h.rating_score))
-    .filter((n) => !Number.isNaN(n));
+  const ratings = modalFeedbackRows
+    .filter(
+      (r) =>
+        r.worker_id === (posterInfo?.user_id ?? task.user_id_origintor) &&
+        r.rating &&
+        !Number.isNaN(Number.parseFloat(r.rating)),
+    )
+    .map((r) => Number.parseFloat(r.rating));
   const avgRating =
     ratings.length > 0
       ? ratings.reduce((a, b) => a + b, 0) / ratings.length
@@ -939,52 +985,48 @@ function TaskDetailModal({
                 disabled={requestLoading}
                 onClick={async () => {
                   if (!currentUserId) return;
-                  if (!requestSent) {
-                    setRequestLoading(true);
-                    try {
-                      const existing = task.applicants
-                        ? task.applicants.trim()
-                        : "";
-                      const ids = existing
-                        ? existing.split(",").map((s) => s.trim())
-                        : [];
-                      if (!ids.includes(currentUserId)) {
-                        ids.push(currentUserId);
+                  // Optimistic UI update immediately — button flips before API call
+                  const prevSent = requestSent;
+                  setRequestSent(!prevSent);
+                  setRequestLoading(true);
+                  try {
+                    const existing = (task.applicants ?? "").trim();
+                    let newApplicants: string;
+                    if (!prevSent) {
+                      // ADD: use contains check to avoid duplicates
+                      const alreadyIn = existing
+                        .split(",")
+                        .map((s) => s.trim())
+                        .some((id) => id === currentUserId);
+                      if (!alreadyIn) {
+                        // Append with comma separator; if empty just set the id
+                        newApplicants = existing
+                          ? `${existing},${currentUserId}`
+                          : currentUserId;
+                      } else {
+                        newApplicants = existing;
                       }
-                      const newApplicants = ids.join(",");
-                      await patchTask(task.task_id, {
-                        applicants: newApplicants,
-                      });
-                      task.applicants = newApplicants;
-                      setRequestSent(true);
-                    } catch {
-                      // ignore
-                    } finally {
-                      setRequestLoading(false);
-                    }
-                  } else {
-                    setRequestLoading(true);
-                    try {
-                      const existing = task.applicants
-                        ? task.applicants.trim()
-                        : "";
+                    } else {
+                      // REMOVE: filter out only this user's ID, then clean dangling commas
                       const ids = existing
-                        ? existing
-                            .split(",")
-                            .map((s) => s.trim())
-                            .filter((id) => id !== currentUserId)
-                        : [];
-                      const newApplicants = ids.join(",");
-                      await patchTask(task.task_id, {
-                        applicants: newApplicants,
-                      });
-                      task.applicants = newApplicants;
-                      setRequestSent(false);
-                    } catch {
-                      // ignore
-                    } finally {
-                      setRequestLoading(false);
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter((id) => id !== currentUserId && id !== "");
+                      newApplicants = ids.join(",");
                     }
+                    await patchTask(task.task_id, {
+                      applicants: newApplicants,
+                    });
+                    task.applicants = newApplicants;
+                    // Propagate update to parent so poster's view refreshes silently
+                    onTaskUpdate?.(newApplicants);
+                    toast("Request Updated!");
+                  } catch {
+                    // Revert optimistic update on failure
+                    setRequestSent(prevSent);
+                    toast("Failed to update request. Please try again.");
+                  } finally {
+                    setRequestLoading(false);
                   }
                 }}
                 style={
@@ -2041,6 +2083,7 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
   );
   const [selectingId, setSelectingId] = useState<string | null>(null);
   const [successId, setSuccessId] = useState<string | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
   const applicantList = task.applicants
     ? task.applicants
@@ -2136,33 +2179,60 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
                   >
                     ✓ Selected
                   </span>
+                ) : acceptingId === applicantId ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setAcceptingId(null)}
+                      className="text-xs px-2 py-0.5 rounded-full"
+                      style={{
+                        color: "oklch(0.55 0 0)",
+                        background: "transparent",
+                        border: "1px solid oklch(0.30 0 0)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectingId === applicantId}
+                      onClick={() => handleSelect(applicantId)}
+                      className="text-xs px-2 py-0.5 rounded-full transition-all"
+                      style={{
+                        border: "1px solid oklch(0.45 0.18 145 / 0.7)",
+                        color: "oklch(0.72 0.18 145)",
+                        background: "oklch(0.18 0.05 145 / 0.2)",
+                        cursor:
+                          selectingId === applicantId
+                            ? "not-allowed"
+                            : "pointer",
+                      }}
+                    >
+                      {selectingId === applicantId
+                        ? "Confirming..."
+                        : "✓ Confirm"}
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
-                    disabled={
-                      selectingId === applicantId ||
-                      !!task.worker_id ||
-                      !!selectedPerformer
-                    }
-                    onClick={() => handleSelect(applicantId)}
+                    disabled={!!task.worker_id || !!selectedPerformer}
+                    onClick={() => setAcceptingId(applicantId)}
                     className="text-xs px-2 py-0.5 rounded-full transition-all"
                     style={{
                       border: "1px solid oklch(0.45 0.18 295 / 0.6)",
                       color: "oklch(0.72 0.15 295)",
                       background: "transparent",
                       cursor:
-                        selectingId === applicantId ||
-                        !!task.worker_id ||
-                        !!selectedPerformer
+                        !!task.worker_id || !!selectedPerformer
                           ? "not-allowed"
                           : "pointer",
                       opacity:
                         !!task.worker_id || !!selectedPerformer ? 0.4 : 1,
                     }}
                   >
-                    {selectingId === applicantId
-                      ? "Selecting..."
-                      : "Select as Performer"}
+                    Accept
                   </button>
                 )}
               </div>
@@ -2201,6 +2271,7 @@ function ProfileScreen({
   const cachedRef = useRef<UserRow | null>(null);
   const [taskHistory, setTaskHistory] = useState<TaskHistory[]>([]);
   const [allTasks, setAllTasks] = useState<LiveTask[]>([]);
+  const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
   const [activeModal, setActiveModal] = useState<
     "posted" | "completed" | "earned" | null
   >(null);
@@ -2230,10 +2301,11 @@ function ProfileScreen({
   useEffect(() => {
     if (!userId) return;
     setStatsLoading(true);
-    Promise.all([fetchTasks(), fetchTaskHistory()])
-      .then(([tasks, history]) => {
+    Promise.all([fetchTasks(), fetchTaskHistory(), fetchFeedback()])
+      .then(([tasks, history, feedback]) => {
         setAllTasks(tasks);
         setTaskHistory(history);
+        setFeedbackRows(feedback);
       })
       .finally(() => setStatsLoading(false));
   }, [userId]);
@@ -2308,14 +2380,14 @@ function ProfileScreen({
     0,
   );
 
-  const ratings = taskHistory
+  const ratings = feedbackRows
     .filter(
-      (t) =>
-        t.worker_id === userId &&
-        t.rating_score &&
-        !Number.isNaN(Number.parseFloat(t.rating_score)),
+      (r) =>
+        r.worker_id === userId &&
+        r.rating &&
+        !Number.isNaN(Number.parseFloat(r.rating)),
     )
-    .map((t) => Number.parseFloat(t.rating_score));
+    .map((r) => Number.parseFloat(r.rating));
   const avgRating =
     ratings.length > 0
       ? ratings.reduce((a, b) => a + b, 0) / ratings.length
@@ -2770,6 +2842,169 @@ function ProfileScreen({
           </form>
         )}
 
+        {/* My Activity */}
+        {(() => {
+          const activeAsHiring = allTasks.filter(
+            (t) => t.user_id_origintor === userId && t.status !== "Completed",
+          );
+          const activeAsWorking = allTasks.filter(
+            (t) => t.worker_id === userId && t.status !== "Completed",
+          );
+          const activeApplied = allTasks.filter(
+            (t) =>
+              t.user_id_origintor !== userId &&
+              !t.worker_id &&
+              t.applicants
+                ?.split(",")
+                .map((s) => s.trim())
+                .includes(userId),
+          );
+          const activityMap = new Map<
+            string,
+            { task: LiveTask; role: "Hiring" | "Working" | "Applied" }
+          >();
+          for (const t of activeAsHiring)
+            activityMap.set(t.task_id, { task: t, role: "Hiring" });
+          for (const t of activeAsWorking)
+            activityMap.set(t.task_id, { task: t, role: "Working" });
+          for (const t of activeApplied) {
+            if (!activityMap.has(t.task_id))
+              activityMap.set(t.task_id, { task: t, role: "Applied" });
+          }
+          const myActivity = Array.from(activityMap.values());
+          return (
+            <div
+              className="w-full rounded-2xl p-4 mt-5"
+              style={{
+                background: "oklch(0.16 0.01 265)",
+                border: "1px solid oklch(0.24 0.012 265)",
+              }}
+            >
+              <p
+                className="text-xs uppercase tracking-widest font-semibold mb-3"
+                style={{ color: "oklch(0.60 0.18 295)" }}
+              >
+                My Activity
+              </p>
+              {statsLoading ? (
+                <p className="text-xs text-muted-foreground text-center py-2">
+                  Loading...
+                </p>
+              ) : myActivity.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-3">
+                  No active tasks. Check the Explore Hub to find work!
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {myActivity.map(({ task, role }) => {
+                    const badgeStyle =
+                      role === "Hiring"
+                        ? {
+                            bg: "oklch(0.32 0.20 30 / 0.35)",
+                            color: "oklch(0.85 0.22 30)",
+                            border: "1px solid oklch(0.55 0.20 30 / 0.6)",
+                          }
+                        : role === "Working"
+                          ? {
+                              bg: "oklch(0.28 0.18 165 / 0.35)",
+                              color: "oklch(0.78 0.22 165)",
+                              border: "1px solid oklch(0.50 0.18 165 / 0.6)",
+                            }
+                          : {
+                              bg: "oklch(0.28 0.10 75 / 0.3)",
+                              color: "oklch(0.75 0.15 75)",
+                              border: "1px solid oklch(0.45 0.12 75 / 0.5)",
+                            };
+                    return (
+                      <div
+                        key={task.task_id}
+                        data-ocid={`activity.${task.task_id}.card`}
+                        className="rounded-xl p-3 flex items-start justify-between gap-2"
+                        style={{
+                          background: "oklch(0.18 0.01 265)",
+                          border: "1px solid oklch(0.26 0.012 265)",
+                        }}
+                      >
+                        <div className="flex flex-col gap-1 flex-1 min-w-0">
+                          <span className="text-sm font-semibold text-foreground truncate">
+                            {task.task_name}
+                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className="text-xs"
+                              style={{ color: "oklch(0.65 0 0)" }}
+                            >
+                              ₹{task.price}
+                            </span>
+                            <span
+                              className="text-xs px-2 py-0.5 rounded-full"
+                              style={{
+                                background: badgeStyle.bg,
+                                color: badgeStyle.color,
+                                border: badgeStyle.border,
+                              }}
+                            >
+                              {role}
+                            </span>
+                            <span
+                              className="text-xs px-1.5 py-0.5 rounded"
+                              style={{
+                                background: "oklch(0.20 0.01 265)",
+                                color: "oklch(0.60 0 0)",
+                              }}
+                            >
+                              {task.status || "Active"}
+                            </span>
+                          </div>
+                          {role === "Hiring" && (
+                            <span
+                              className="text-xs"
+                              style={{ color: "oklch(0.55 0.05 295)" }}
+                            >
+                              {!task.applicants ||
+                              task.applicants.split(",").filter(Boolean)
+                                .length === 0
+                                ? "Waiting for Applicants"
+                                : !task.worker_id
+                                  ? `${task.applicants.split(",").filter((s) => s.trim()).length} Applicant(s) Found`
+                                  : `Performer: @${task.worker_id}`}
+                            </span>
+                          )}
+                          {role === "Working" && (
+                            <span
+                              className="text-xs"
+                              style={{
+                                color:
+                                  task.payment_status === "Held by Admin"
+                                    ? "oklch(0.68 0.18 145)"
+                                    : "oklch(0.55 0 0)",
+                              }}
+                            >
+                              {task.payment_status === "Held by Admin"
+                                ? "✅ Start Working!"
+                                : task.payment_status === "Pending"
+                                  ? "Awaiting Admin Verification..."
+                                  : task.status}
+                            </span>
+                          )}
+                          {role === "Applied" && (
+                            <span
+                              className="text-xs"
+                              style={{ color: "oklch(0.55 0 0)" }}
+                            >
+                              Request sent — waiting for poster
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Stats */}
         <div
           className="w-full rounded-2xl p-4 mt-5"
@@ -3104,11 +3339,13 @@ function ExploreScreen({
   loading,
   fetchError,
   currentUserId,
+  onTaskUpdate,
 }: {
   tasks: LiveTask[];
   loading: boolean;
   fetchError: string;
   currentUserId: string | null;
+  onTaskUpdate?: (taskId: string, updatedApplicants: string) => void;
 }) {
   const [selectedTask, setSelectedTask] = useState<LiveTask | null>(null);
   return (
@@ -3172,6 +3409,12 @@ function ExploreScreen({
             currentUserId={currentUserId}
             allTasks={tasks}
             onClose={() => setSelectedTask(null)}
+            onTaskUpdate={(updatedApplicants) => {
+              onTaskUpdate?.(selectedTask.task_id, updatedApplicants);
+              setSelectedTask((prev) =>
+                prev ? { ...prev, applicants: updatedApplicants } : prev,
+              );
+            }}
           />
         )}
       </section>
@@ -3261,6 +3504,15 @@ export default function App() {
             loading={tasksLoading}
             fetchError={fetchError}
             currentUserId={userId}
+            onTaskUpdate={(taskId, updatedApplicants) =>
+              setTasks((prev) =>
+                prev.map((t) =>
+                  t.task_id === taskId
+                    ? { ...t, applicants: updatedApplicants }
+                    : t,
+                ),
+              )
+            }
           />
         )}
         {activeTab === "post" && (
@@ -3279,6 +3531,7 @@ export default function App() {
         )}
       </div>
       <BottomNav active={activeTab} onTabChange={handleTabChange} />
+      <Toaster />
     </div>
   );
 }

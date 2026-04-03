@@ -43,7 +43,7 @@ interface LiveTask {
   category?: string;
   user_id_origintor?: string;
   applicants?: string;
-  worker_id?: string;
+  user_id_recipient?: string;
   payment_status?: string;
 }
 
@@ -62,7 +62,7 @@ interface TaskHistory {
   task_id: string;
   task_name: string;
   user_id_origintor: string;
-  worker_id: string;
+  user_id_recipient: string;
   status: string;
   completion_date: string;
   payment_status: string;
@@ -72,7 +72,8 @@ interface TaskHistory {
 
 interface FeedbackRow {
   task_id: string;
-  worker_id: string;
+  worker_id?: string;
+  user_id_recipient?: string;
   rating: string;
 }
 
@@ -206,7 +207,10 @@ async function patchTask(taskId: string, data: object) {
       body: JSON.stringify({ data }),
     },
   );
-  if (!res.ok) throw new Error("Failed to update task");
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to update task: ${res.status} ${errText}`);
+  }
 }
 
 // ── Design constants ─────────────────────────────────────────────────────────
@@ -628,7 +632,8 @@ function TaskDetailModal({
         setPosterInfo(user);
         setPosterHistory(
           history.filter(
-            (h) => h.worker_id === (user?.user_id ?? task.user_id_origintor),
+            (h) =>
+              h.user_id_recipient === (user?.user_id ?? task.user_id_origintor),
           ),
         );
         setModalFeedbackRows(feedback);
@@ -644,7 +649,9 @@ function TaskDetailModal({
   const ratings = modalFeedbackRows
     .filter(
       (r) =>
-        r.worker_id === (posterInfo?.user_id ?? task.user_id_origintor) &&
+        (r.user_id_recipient ===
+          (posterInfo?.user_id ?? task.user_id_origintor) ||
+          r.worker_id === (posterInfo?.user_id ?? task.user_id_origintor)) &&
         r.rating &&
         !Number.isNaN(Number.parseFloat(r.rating)),
     )
@@ -1021,10 +1028,18 @@ function TaskDetailModal({
                     // Propagate update to parent so poster's view refreshes silently
                     onTaskUpdate?.(newApplicants);
                     toast("Request Updated!");
-                  } catch {
+                  } catch (e) {
                     // Revert optimistic update on failure
                     setRequestSent(prevSent);
-                    toast("Failed to update request. Please try again.");
+                    console.error("Send request error:", e);
+                    const msg = e instanceof Error ? e.message : String(e);
+                    toast(
+                      msg.includes("column") ||
+                        msg.includes("404") ||
+                        msg.includes("not found")
+                        ? "Sheet column 'applicants' missing. Add it to your task tab."
+                        : "Failed to update request. Please try again.",
+                    );
                   } finally {
                     setRequestLoading(false);
                   }
@@ -2096,7 +2111,7 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
     setSelectingId(applicantId);
     try {
       await patchTask(task.task_id, {
-        worker_id: applicantId,
+        user_id_recipient: applicantId,
         status: "Awaiting Payment",
       });
       setSuccessId(applicantId);
@@ -2169,7 +2184,7 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
                 </span>
                 {successId === applicantId ||
                 selectedPerformer === applicantId ||
-                task.worker_id === applicantId ? (
+                task.user_id_recipient === applicantId ? (
                   <span
                     className="text-xs font-bold px-2 py-0.5 rounded-full"
                     style={{
@@ -2217,7 +2232,7 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
                 ) : (
                   <button
                     type="button"
-                    disabled={!!task.worker_id || !!selectedPerformer}
+                    disabled={!!task.user_id_recipient || !!selectedPerformer}
                     onClick={() => setAcceptingId(applicantId)}
                     className="text-xs px-2 py-0.5 rounded-full transition-all"
                     style={{
@@ -2225,11 +2240,13 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
                       color: "oklch(0.72 0.15 295)",
                       background: "transparent",
                       cursor:
-                        !!task.worker_id || !!selectedPerformer
+                        !!task.user_id_recipient || !!selectedPerformer
                           ? "not-allowed"
                           : "pointer",
                       opacity:
-                        !!task.worker_id || !!selectedPerformer ? 0.4 : 1,
+                        !!task.user_id_recipient || !!selectedPerformer
+                          ? 0.4
+                          : 1,
                     }}
                   >
                     Accept
@@ -2371,9 +2388,11 @@ function ProfileScreen({
     new Map(postedTasks.map((t) => [t.task_id, t])).values(),
   );
 
-  const completedTasks = taskHistory.filter((t) => t.worker_id === userId);
+  const completedTasks = taskHistory.filter(
+    (t) => t.user_id_recipient === userId,
+  );
   const paidOutTasks = taskHistory.filter(
-    (t) => t.worker_id === userId && t.payment_status === "Paid Out",
+    (t) => t.user_id_recipient === userId && t.payment_status === "Paid Out",
   );
   const totalEarned = paidOutTasks.reduce(
     (sum, t) => sum + (Number.parseFloat(t.price) || 0),
@@ -2383,7 +2402,7 @@ function ProfileScreen({
   const ratings = feedbackRows
     .filter(
       (r) =>
-        r.worker_id === userId &&
+        (r.user_id_recipient === userId || r.worker_id === userId) &&
         r.rating &&
         !Number.isNaN(Number.parseFloat(r.rating)),
     )
@@ -2848,12 +2867,12 @@ function ProfileScreen({
             (t) => t.user_id_origintor === userId && t.status !== "Completed",
           );
           const activeAsWorking = allTasks.filter(
-            (t) => t.worker_id === userId && t.status !== "Completed",
+            (t) => t.user_id_recipient === userId && t.status !== "Completed",
           );
           const activeApplied = allTasks.filter(
             (t) =>
               t.user_id_origintor !== userId &&
-              !t.worker_id &&
+              !t.user_id_recipient &&
               t.applicants
                 ?.split(",")
                 .map((s) => s.trim())
@@ -2965,9 +2984,9 @@ function ProfileScreen({
                               task.applicants.split(",").filter(Boolean)
                                 .length === 0
                                 ? "Waiting for Applicants"
-                                : !task.worker_id
+                                : !task.user_id_recipient
                                   ? `${task.applicants.split(",").filter((s) => s.trim()).length} Applicant(s) Found`
-                                  : `Performer: @${task.worker_id}`}
+                                  : `Performer: @${task.user_id_recipient}`}
                             </span>
                           )}
                           {role === "Working" && (
