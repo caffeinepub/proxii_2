@@ -77,10 +77,27 @@ interface FeedbackRow {
 }
 
 const SHEETDB = "https://sheetdb.io/api/v1/m2d47h1nseqog";
+const FETCH_TIMEOUT_MS = 12000; // 12 second timeout for all SheetDB calls
+
+// Fetch with timeout to avoid infinite "sending" state on slow/unresponsive API
+async function fetchWithTimeout(
+  url: string,
+  options?: RequestInit,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ── SheetDB helpers ──────────────────────────────────────────────────────────
 async function postTask(data: object) {
-  const res = await fetch(SHEETDB, {
+  const res = await fetchWithTimeout(SHEETDB, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sheet: "task", data: [data] }),
@@ -89,14 +106,14 @@ async function postTask(data: object) {
 }
 
 async function fetchTasks(): Promise<LiveTask[]> {
-  const res = await fetch(`${SHEETDB}?sheet=task`);
+  const res = await fetchWithTimeout(`${SHEETDB}?sheet=task`);
   if (!res.ok) throw new Error("Failed to fetch tasks");
   return res.json();
 }
 
 async function fetchTaskHistory(): Promise<TaskHistory[]> {
   try {
-    const res = await fetch(`${SHEETDB}?sheet=task_history`);
+    const res = await fetchWithTimeout(`${SHEETDB}?sheet=task_history`);
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -106,7 +123,7 @@ async function fetchTaskHistory(): Promise<TaskHistory[]> {
 
 async function fetchFeedback(): Promise<FeedbackRow[]> {
   try {
-    const res = await fetch(`${SHEETDB}?sheet=feedback`);
+    const res = await fetchWithTimeout(`${SHEETDB}?sheet=feedback`);
     if (!res.ok) return [];
     return res.json();
   } catch {
@@ -115,7 +132,7 @@ async function fetchFeedback(): Promise<FeedbackRow[]> {
 }
 
 async function fetchUserById(userId: string): Promise<UserRow | null> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/search?sheet=users&user_id=${encodeURIComponent(userId)}`,
   );
   if (!res.ok) return null;
@@ -124,7 +141,7 @@ async function fetchUserById(userId: string): Promise<UserRow | null> {
 }
 
 async function checkUserIdUnique(userId: string): Promise<boolean> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/search?sheet=users&user_id=${encodeURIComponent(userId)}`,
   );
   if (!res.ok) return true;
@@ -133,21 +150,17 @@ async function checkUserIdUnique(userId: string): Promise<boolean> {
 }
 
 async function checkEmailUnique(email: string): Promise<boolean> {
-  try {
-    const res = await fetch(
-      `${SHEETDB}/search?sheet=users&email_id=${encodeURIComponent(email)}`,
-    );
-    if (!res.ok) throw new Error("fetch failed");
-    const rows: UserRow[] = await res.json();
-    return rows.length === 0;
-  } catch {
-    // On network error, block submission to prevent duplicate accounts
-    return false;
-  }
+  // On network error, allow submission (don't silently block the user)
+  const res = await fetchWithTimeout(
+    `${SHEETDB}/search?sheet=users&email_id=${encodeURIComponent(email)}`,
+  );
+  if (!res.ok) return true;
+  const rows: UserRow[] = await res.json();
+  return rows.length === 0;
 }
 
 async function createUser(data: object) {
-  const res = await fetch(SHEETDB, {
+  const res = await fetchWithTimeout(SHEETDB, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sheet: "users", data: [data] }),
@@ -160,7 +173,7 @@ async function loginUser(
   passwordHash: string,
 ): Promise<UserRow | null> {
   // Fetch by username only, then verify hash client-side
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/search?sheet=users&user_id=${encodeURIComponent(userId)}`,
   );
   if (!res.ok) return null;
@@ -173,19 +186,19 @@ async function loginUser(
 }
 
 async function patchUser(userId: string, data: object) {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/user_id/${encodeURIComponent(userId)}?sheet=users`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheet: "users", data }),
+      body: JSON.stringify({ data }),
     },
   );
   if (!res.ok) throw new Error("Failed to update profile");
 }
 
 async function patchTask(taskId: string, data: object) {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${SHEETDB}/task_id/${encodeURIComponent(taskId)}?sheet=task`,
     {
       method: "PATCH",
