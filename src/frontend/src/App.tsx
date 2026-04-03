@@ -190,7 +190,7 @@ async function patchTask(taskId: string, data: object) {
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sheet: "task", data }),
+      body: JSON.stringify({ data }),
     },
   );
   if (!res.ok) throw new Error("Failed to update task");
@@ -576,11 +576,13 @@ function TaskDetailModal({
   currentUserId,
   allTasks,
   onClose,
+  onTaskUpdate,
 }: {
   task: LiveTask;
   currentUserId: string | null;
   allTasks: LiveTask[];
   onClose: () => void;
+  onTaskUpdate?: (updatedApplicants: string) => void;
 }) {
   const [posterInfo, setPosterInfo] = useState<UserRow | null>(null);
   const [_posterHistory, setPosterHistory] = useState<TaskHistory[]>([]);
@@ -588,10 +590,12 @@ function TaskDetailModal({
   const [posterLoading, setPosterLoading] = useState(true);
   const [requestSent, setRequestSent] = useState(() => {
     if (!currentUserId || !task.applicants) return false;
-    return task.applicants
+    // Use contains check: look for user_id anywhere in the applicants string
+    const applicantsStr = task.applicants;
+    return applicantsStr
       .split(",")
       .map((s) => s.trim())
-      .includes(currentUserId);
+      .some((id) => id === currentUserId);
   });
   const [requestLoading, setRequestLoading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
@@ -968,39 +972,41 @@ function TaskDetailModal({
                 disabled={requestLoading}
                 onClick={async () => {
                   if (!currentUserId) return;
-                  // Optimistic UI update immediately
+                  // Optimistic UI update immediately — button flips before API call
                   const prevSent = requestSent;
-                  setRequestSent(!requestSent);
+                  setRequestSent(!prevSent);
                   setRequestLoading(true);
                   try {
                     const existing = (task.applicants ?? "").trim();
+                    let newApplicants: string;
                     if (!prevSent) {
-                      // ADD: contains check first
+                      // ADD: use contains check to avoid duplicates
                       const alreadyIn = existing
                         .split(",")
                         .map((s) => s.trim())
                         .some((id) => id === currentUserId);
                       if (!alreadyIn) {
-                        const newApplicants = existing
+                        // Append with comma separator; if empty just set the id
+                        newApplicants = existing
                           ? `${existing},${currentUserId}`
                           : currentUserId;
-                        await patchTask(task.task_id, {
-                          applicants: newApplicants,
-                        });
-                        task.applicants = newApplicants;
+                      } else {
+                        newApplicants = existing;
                       }
                     } else {
-                      // REMOVE: filter out currentUserId, clean up commas
+                      // REMOVE: filter out only this user's ID, then clean dangling commas
                       const ids = existing
                         .split(",")
                         .map((s) => s.trim())
-                        .filter((id) => id !== currentUserId);
-                      const newApplicants = ids.join(",");
-                      await patchTask(task.task_id, {
-                        applicants: newApplicants,
-                      });
-                      task.applicants = newApplicants;
+                        .filter((id) => id !== currentUserId && id !== "");
+                      newApplicants = ids.join(",");
                     }
+                    await patchTask(task.task_id, {
+                      applicants: newApplicants,
+                    });
+                    task.applicants = newApplicants;
+                    // Propagate update to parent so poster's view refreshes silently
+                    onTaskUpdate?.(newApplicants);
                     toast("Request Updated!");
                   } catch {
                     // Revert optimistic update on failure
@@ -3320,11 +3326,13 @@ function ExploreScreen({
   loading,
   fetchError,
   currentUserId,
+  onTaskUpdate,
 }: {
   tasks: LiveTask[];
   loading: boolean;
   fetchError: string;
   currentUserId: string | null;
+  onTaskUpdate?: (taskId: string, updatedApplicants: string) => void;
 }) {
   const [selectedTask, setSelectedTask] = useState<LiveTask | null>(null);
   return (
@@ -3388,6 +3396,12 @@ function ExploreScreen({
             currentUserId={currentUserId}
             allTasks={tasks}
             onClose={() => setSelectedTask(null)}
+            onTaskUpdate={(updatedApplicants) => {
+              onTaskUpdate?.(selectedTask.task_id, updatedApplicants);
+              setSelectedTask((prev) =>
+                prev ? { ...prev, applicants: updatedApplicants } : prev,
+              );
+            }}
           />
         )}
       </section>
@@ -3477,6 +3491,15 @@ export default function App() {
             loading={tasksLoading}
             fetchError={fetchError}
             currentUserId={userId}
+            onTaskUpdate={(taskId, updatedApplicants) =>
+              setTasks((prev) =>
+                prev.map((t) =>
+                  t.task_id === taskId
+                    ? { ...t, applicants: updatedApplicants }
+                    : t,
+                ),
+              )
+            }
           />
         )}
         {activeTab === "post" && (
