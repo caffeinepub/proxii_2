@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2,
   Compass,
+  Copy,
   Download,
   Edit2,
   ExternalLink,
@@ -45,6 +46,7 @@ interface LiveTask {
   applicants?: string;
   user_id_recipient?: string;
   payment_status?: string;
+  upi_username?: string;
 }
 
 interface UserRow {
@@ -2092,13 +2094,17 @@ function PostTaskScreen({
 
 // ── Profile Screen ────────────────────────────────────────────────────────────
 
-function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
+function HiringActivityCard({ task }: { task: LiveTask }) {
   const [selectedPerformer, setSelectedPerformer] = useState<string | null>(
-    null,
+    task.user_id_recipient ?? null,
   );
   const [selectingId, setSelectingId] = useState<string | null>(null);
-  const [successId, setSuccessId] = useState<string | null>(null);
-  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [loadingTelegram, setLoadingTelegram] = useState<
+    Record<string, boolean>
+  >({});
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [paymentUpiInput, setPaymentUpiInput] = useState("");
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
 
   const applicantList = task.applicants
     ? task.applicants
@@ -2107,7 +2113,318 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
         .filter(Boolean)
     : [];
 
-  async function handleSelect(applicantId: string) {
+  async function handleSelectAndPay(applicantId: string) {
+    setSelectingId(applicantId);
+    try {
+      await patchTask(task.task_id, {
+        user_id_recipient: applicantId,
+        status: "Awaiting Payment",
+      });
+      setSelectedPerformer(applicantId);
+      setPaymentModalOpen(true);
+    } catch {
+      toast.error("Failed to select performer. Try again.");
+    } finally {
+      setSelectingId(null);
+    }
+  }
+
+  async function handleOpenTelegram(applicantId: string) {
+    setLoadingTelegram((prev) => ({ ...prev, [applicantId]: true }));
+    try {
+      const user = await fetchUserById(applicantId);
+      if (user?.telegram_id) {
+        const tgId = user.telegram_id.replace(/^@/, "");
+        window.open(`https://t.me/${tgId}`, "_blank");
+      } else {
+        toast.error("Telegram ID not found for this user.");
+      }
+    } catch {
+      toast.error("Could not fetch user info.");
+    } finally {
+      setLoadingTelegram((prev) => ({ ...prev, [applicantId]: false }));
+    }
+  }
+
+  async function handlePaymentSubmit() {
+    if (!paymentUpiInput.trim()) return;
+    setPaymentSubmitting(true);
+    try {
+      await patchTask(task.task_id, {
+        upi_username: paymentUpiInput.trim(),
+        payment_status: "Pending Verification",
+      });
+      toast.success("Payment submitted! Awaiting admin verification.");
+      setPaymentModalOpen(false);
+      setPaymentUpiInput("");
+    } catch {
+      toast.error("Failed to submit. Try again.");
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  }
+
+  const isLocked = !!(task.user_id_recipient || selectedPerformer);
+  const hasApplicants = applicantList.length > 0;
+
+  return (
+    <>
+      {/* Applicant list for Hiring card */}
+      {hasApplicants && !isLocked && (
+        <div className="mt-1.5 flex flex-col gap-1">
+          {applicantList.map((applicantId) => (
+            <div
+              key={applicantId}
+              className="flex items-center justify-between rounded-lg px-2 py-1.5 gap-2"
+              style={{
+                background: "oklch(0.13 0.01 265)",
+                border: "1px solid oklch(0.24 0.012 265)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => handleOpenTelegram(applicantId)}
+                disabled={loadingTelegram[applicantId]}
+                className="text-xs font-medium flex items-center gap-1 transition-all"
+                style={{
+                  color: "oklch(0.72 0.18 295)",
+                  textDecoration: "underline",
+                  textUnderlineOffset: "2px",
+                  background: "transparent",
+                  border: "none",
+                  cursor: loadingTelegram[applicantId] ? "wait" : "pointer",
+                  padding: 0,
+                }}
+              >
+                {loadingTelegram[applicantId] ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : null}
+                @{applicantId}
+              </button>
+              <button
+                type="button"
+                disabled={selectingId === applicantId}
+                onClick={() => handleSelectAndPay(applicantId)}
+                className="text-xs px-2 py-0.5 rounded-full transition-all shrink-0 flex items-center gap-1"
+                style={{
+                  border: "1px solid oklch(0.55 0.22 295 / 0.7)",
+                  color: "oklch(0.78 0.20 295)",
+                  background: "oklch(0.22 0.08 295 / 0.3)",
+                  cursor:
+                    selectingId === applicantId ? "not-allowed" : "pointer",
+                }}
+              >
+                {selectingId === applicantId ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Working...
+                  </>
+                ) : (
+                  "Select & Pay"
+                )}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {isLocked && (
+        <span
+          className="text-xs mt-1"
+          style={{ color: "oklch(0.55 0.05 295)" }}
+        >
+          Performer: @{task.user_id_recipient || selectedPerformer}
+        </span>
+      )}
+
+      {/* Payment Modal */}
+      {paymentModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            background: "oklch(0.05 0 0 / 0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+          onClick={() => setPaymentModalOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setPaymentModalOpen(false);
+          }}
+          role="presentation"
+        >
+          <div
+            style={{
+              background: "oklch(0.16 0.01 265)",
+              border: "1px solid oklch(0.28 0.012 265)",
+              borderRadius: "1.25rem",
+              padding: "1.5rem",
+              width: "100%",
+              maxWidth: "400px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            aria-modal="true"
+            data-ocid="activity.payment.modal"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-foreground">
+                Complete Payment
+              </h3>
+              <button
+                type="button"
+                data-ocid="activity.payment.close_button"
+                onClick={() => setPaymentModalOpen(false)}
+                className="text-muted-foreground hover:text-foreground p-1 rounded-full transition-colors"
+                style={{ background: "oklch(0.22 0.01 265)" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div>
+              <p className="text-xs text-muted-foreground mb-1.5">
+                Admin UPI ID
+              </p>
+              <div
+                className="flex items-center justify-between rounded-xl px-3 py-2.5"
+                style={{
+                  background: "oklch(0.12 0.01 265)",
+                  border: "1px solid oklch(0.30 0.015 295 / 0.6)",
+                }}
+              >
+                <span
+                  className="text-sm font-semibold font-mono"
+                  style={{ color: "oklch(0.82 0.18 295)" }}
+                >
+                  neelamperween1@okicici
+                </span>
+                <button
+                  type="button"
+                  data-ocid="activity.payment.copy_upi_button"
+                  onClick={() => {
+                    navigator.clipboard.writeText("neelamperween1@okicici");
+                    toast("Copied UPI ID!");
+                  }}
+                  className="ml-2 p-1 rounded-lg transition-colors"
+                  style={{
+                    color: "oklch(0.65 0.12 295)",
+                    background: "oklch(0.20 0.05 295 / 0.3)",
+                  }}
+                  title="Copy UPI ID"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <p
+              className="text-xs leading-relaxed"
+              style={{ color: "oklch(0.60 0 0)" }}
+            >
+              Transfer{" "}
+              <span style={{ color: "oklch(0.82 0.18 295)", fontWeight: 600 }}>
+                ₹{task.price}
+              </span>{" "}
+              to Admin. Once paid, enter your UPI Name below.
+            </p>
+
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="hiring-upi-input"
+                className="text-xs font-medium"
+                style={{ color: "oklch(0.70 0.08 295)" }}
+              >
+                Your UPI username
+              </label>
+              <input
+                id="hiring-upi-input"
+                type="text"
+                data-ocid="activity.payment.input"
+                value={paymentUpiInput}
+                onChange={(e) => setPaymentUpiInput(e.target.value)}
+                placeholder="e.g. yourname@upi"
+                className="w-full rounded-xl px-3 py-2.5 text-sm outline-none transition-all"
+                style={{
+                  background: "oklch(0.12 0.01 265)",
+                  border: "1px solid oklch(0.28 0.015 265)",
+                  color: "oklch(0.92 0 0)",
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.border =
+                    "1px solid oklch(0.55 0.22 295 / 0.8)";
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.border =
+                    "1px solid oklch(0.28 0.015 265)";
+                }}
+              />
+            </div>
+
+            <button
+              type="button"
+              data-ocid="activity.payment.submit_button"
+              disabled={!paymentUpiInput.trim() || paymentSubmitting}
+              onClick={handlePaymentSubmit}
+              className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all flex items-center justify-center gap-2"
+              style={{
+                background:
+                  !paymentUpiInput.trim() || paymentSubmitting
+                    ? "oklch(0.25 0.05 295 / 0.5)"
+                    : "oklch(0.55 0.22 295)",
+                color:
+                  !paymentUpiInput.trim() || paymentSubmitting
+                    ? "oklch(0.55 0 0)"
+                    : "white",
+                cursor:
+                  !paymentUpiInput.trim() || paymentSubmitting
+                    ? "not-allowed"
+                    : "pointer",
+                border: "none",
+              }}
+            >
+              {paymentSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                "I Have Paid"
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
+  const [selectedPerformer, setSelectedPerformer] = useState<string | null>(
+    task.user_id_recipient ?? null,
+  );
+  const [selectingId, setSelectingId] = useState<string | null>(null);
+  const [successId, setSuccessId] = useState<string | null>(null);
+  const [loadingTelegram, setLoadingTelegram] = useState<
+    Record<string, boolean>
+  >({});
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [paymentUpiInput, setPaymentUpiInput] = useState("");
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+
+  const applicantList = task.applicants
+    ? task.applicants
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+
+  async function handleSelectAndPay(applicantId: string) {
     setSelectingId(applicantId);
     try {
       await patchTask(task.task_id, {
@@ -2116,12 +2433,50 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
       });
       setSuccessId(applicantId);
       setSelectedPerformer(applicantId);
+      setPaymentModalOpen(true);
     } catch {
-      // ignore
+      toast.error("Failed to select performer. Try again.");
     } finally {
       setSelectingId(null);
     }
   }
+
+  async function handleOpenTelegram(applicantId: string) {
+    setLoadingTelegram((prev) => ({ ...prev, [applicantId]: true }));
+    try {
+      const user = await fetchUserById(applicantId);
+      if (user?.telegram_id) {
+        const tgId = user.telegram_id.replace(/^@/, "");
+        window.open(`https://t.me/${tgId}`, "_blank");
+      } else {
+        toast.error("Telegram ID not found for this user.");
+      }
+    } catch {
+      toast.error("Could not fetch user info.");
+    } finally {
+      setLoadingTelegram((prev) => ({ ...prev, [applicantId]: false }));
+    }
+  }
+
+  async function handlePaymentSubmit() {
+    if (!paymentUpiInput.trim()) return;
+    setPaymentSubmitting(true);
+    try {
+      await patchTask(task.task_id, {
+        upi_username: paymentUpiInput.trim(),
+        payment_status: "Pending Verification",
+      });
+      toast.success("Payment submitted! Awaiting admin verification.");
+      setPaymentModalOpen(false);
+      setPaymentUpiInput("");
+    } catch {
+      toast.error("Failed to submit. Try again.");
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  }
+
+  const isLocked = !!(task.user_id_recipient || selectedPerformer);
 
   return (
     <div
@@ -2170,23 +2525,40 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
             {applicantList.map((applicantId) => (
               <div
                 key={applicantId}
-                className="flex items-center justify-between rounded-lg px-2 py-1.5"
+                className="flex items-center justify-between rounded-lg px-2 py-1.5 gap-2"
                 style={{
                   background: "oklch(0.15 0.01 265)",
                   border: "1px solid oklch(0.26 0.012 265)",
                 }}
               >
-                <span
-                  className="text-xs font-medium"
-                  style={{ color: "oklch(0.72 0.15 295)" }}
+                {/* Telegram link for applicant name */}
+                <button
+                  type="button"
+                  onClick={() => handleOpenTelegram(applicantId)}
+                  disabled={loadingTelegram[applicantId]}
+                  className="text-xs font-medium flex items-center gap-1 transition-all"
+                  style={{
+                    color: "oklch(0.72 0.18 295)",
+                    textDecoration: "underline",
+                    textUnderlineOffset: "2px",
+                    background: "transparent",
+                    border: "none",
+                    cursor: loadingTelegram[applicantId] ? "wait" : "pointer",
+                    padding: 0,
+                  }}
                 >
+                  {loadingTelegram[applicantId] ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : null}
                   @{applicantId}
-                </span>
+                </button>
+
+                {/* Select & Pay or Selected indicator */}
                 {successId === applicantId ||
                 selectedPerformer === applicantId ||
                 task.user_id_recipient === applicantId ? (
                   <span
-                    className="text-xs font-bold px-2 py-0.5 rounded-full"
+                    className="text-xs font-bold px-2 py-0.5 rounded-full shrink-0"
                     style={{
                       color: "oklch(0.72 0.18 150)",
                       background: "oklch(0.18 0.05 150 / 0.3)",
@@ -2194,62 +2566,32 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
                   >
                     ✓ Selected
                   </span>
-                ) : acceptingId === applicantId ? (
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setAcceptingId(null)}
-                      className="text-xs px-2 py-0.5 rounded-full"
-                      style={{
-                        color: "oklch(0.55 0 0)",
-                        background: "transparent",
-                        border: "1px solid oklch(0.30 0 0)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      disabled={selectingId === applicantId}
-                      onClick={() => handleSelect(applicantId)}
-                      className="text-xs px-2 py-0.5 rounded-full transition-all"
-                      style={{
-                        border: "1px solid oklch(0.45 0.18 145 / 0.7)",
-                        color: "oklch(0.72 0.18 145)",
-                        background: "oklch(0.18 0.05 145 / 0.2)",
-                        cursor:
-                          selectingId === applicantId
-                            ? "not-allowed"
-                            : "pointer",
-                      }}
-                    >
-                      {selectingId === applicantId
-                        ? "Confirming..."
-                        : "✓ Confirm"}
-                    </button>
-                  </div>
                 ) : (
                   <button
                     type="button"
-                    disabled={!!task.user_id_recipient || !!selectedPerformer}
-                    onClick={() => setAcceptingId(applicantId)}
-                    className="text-xs px-2 py-0.5 rounded-full transition-all"
+                    disabled={isLocked || selectingId === applicantId}
+                    onClick={() => handleSelectAndPay(applicantId)}
+                    className="text-xs px-2 py-0.5 rounded-full transition-all shrink-0 flex items-center gap-1"
                     style={{
-                      border: "1px solid oklch(0.45 0.18 295 / 0.6)",
-                      color: "oklch(0.72 0.15 295)",
-                      background: "transparent",
-                      cursor:
-                        !!task.user_id_recipient || !!selectedPerformer
-                          ? "not-allowed"
-                          : "pointer",
-                      opacity:
-                        !!task.user_id_recipient || !!selectedPerformer
-                          ? 0.4
-                          : 1,
+                      border: "1px solid oklch(0.55 0.22 295 / 0.7)",
+                      color: isLocked
+                        ? "oklch(0.45 0.05 295)"
+                        : "oklch(0.78 0.20 295)",
+                      background: isLocked
+                        ? "transparent"
+                        : "oklch(0.22 0.08 295 / 0.3)",
+                      cursor: isLocked ? "not-allowed" : "pointer",
+                      opacity: isLocked ? 0.4 : 1,
                     }}
                   >
-                    Accept
+                    {selectingId === applicantId ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Working...
+                      </>
+                    ) : (
+                      "Select & Pay"
+                    )}
                   </button>
                 )}
               </div>
@@ -2257,6 +2599,177 @@ function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
           </div>
         )}
       </div>
+
+      {/* Payment Modal */}
+      {paymentModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            background: "oklch(0.05 0 0 / 0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+          onClick={() => setPaymentModalOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setPaymentModalOpen(false);
+          }}
+          role="presentation"
+        >
+          <div
+            style={{
+              background: "oklch(0.16 0.01 265)",
+              border: "1px solid oklch(0.28 0.012 265)",
+              borderRadius: "1.25rem",
+              padding: "1.5rem",
+              width: "100%",
+              maxWidth: "400px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            aria-modal="true"
+            data-ocid="payment.modal"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-foreground">
+                Complete Payment
+              </h3>
+              <button
+                type="button"
+                data-ocid="payment.close_button"
+                onClick={() => setPaymentModalOpen(false)}
+                className="text-muted-foreground hover:text-foreground p-1 rounded-full transition-colors"
+                style={{ background: "oklch(0.22 0.01 265)" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* UPI ID row */}
+            <div>
+              <p className="text-xs text-muted-foreground mb-1.5">
+                Admin UPI ID
+              </p>
+              <div
+                className="flex items-center justify-between rounded-xl px-3 py-2.5"
+                style={{
+                  background: "oklch(0.12 0.01 265)",
+                  border: "1px solid oklch(0.30 0.015 295 / 0.6)",
+                }}
+              >
+                <span
+                  className="text-sm font-semibold font-mono"
+                  style={{ color: "oklch(0.82 0.18 295)" }}
+                >
+                  neelamperween1@okicici
+                </span>
+                <button
+                  type="button"
+                  data-ocid="payment.copy_upi_button"
+                  onClick={() => {
+                    navigator.clipboard.writeText("neelamperween1@okicici");
+                    toast("Copied UPI ID!");
+                  }}
+                  className="ml-2 p-1 rounded-lg transition-colors"
+                  style={{
+                    color: "oklch(0.65 0.12 295)",
+                    background: "oklch(0.20 0.05 295 / 0.3)",
+                  }}
+                  title="Copy UPI ID"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Instruction */}
+            <p
+              className="text-xs leading-relaxed"
+              style={{ color: "oklch(0.60 0 0)" }}
+            >
+              Transfer{" "}
+              <span style={{ color: "oklch(0.82 0.18 295)", fontWeight: 600 }}>
+                ₹{task.price}
+              </span>{" "}
+              to Admin. Once paid, enter your UPI Name below.
+            </p>
+
+            {/* UPI username input */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="upi-username-input"
+                className="text-xs font-medium"
+                style={{ color: "oklch(0.70 0.08 295)" }}
+              >
+                Your UPI username
+              </label>
+              <input
+                id="upi-username-input"
+                type="text"
+                data-ocid="payment.input"
+                value={paymentUpiInput}
+                onChange={(e) => setPaymentUpiInput(e.target.value)}
+                placeholder="e.g. yourname@upi"
+                className="w-full rounded-xl px-3 py-2.5 text-sm outline-none transition-all"
+                style={{
+                  background: "oklch(0.12 0.01 265)",
+                  border: "1px solid oklch(0.28 0.015 265)",
+                  color: "oklch(0.92 0 0)",
+                  boxShadow: "none",
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.border =
+                    "1px solid oklch(0.55 0.22 295 / 0.8)";
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.border =
+                    "1px solid oklch(0.28 0.015 265)";
+                }}
+              />
+            </div>
+
+            {/* Submit button */}
+            <button
+              type="button"
+              data-ocid="payment.submit_button"
+              disabled={!paymentUpiInput.trim() || paymentSubmitting}
+              onClick={handlePaymentSubmit}
+              className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all flex items-center justify-center gap-2"
+              style={{
+                background:
+                  !paymentUpiInput.trim() || paymentSubmitting
+                    ? "oklch(0.25 0.05 295 / 0.5)"
+                    : "oklch(0.55 0.22 295)",
+                color:
+                  !paymentUpiInput.trim() || paymentSubmitting
+                    ? "oklch(0.55 0 0)"
+                    : "white",
+                cursor:
+                  !paymentUpiInput.trim() || paymentSubmitting
+                    ? "not-allowed"
+                    : "pointer",
+                border: "none",
+              }}
+            >
+              {paymentSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                "I Have Paid"
+              )}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2934,27 +3447,33 @@ function ProfileScreen({
                               color: "oklch(0.75 0.15 75)",
                               border: "1px solid oklch(0.45 0.12 75 / 0.5)",
                             };
+                    const isHeld = task.payment_status === "Held by Admin";
                     return (
                       <div
                         key={task.task_id}
                         data-ocid={`activity.${task.task_id}.card`}
-                        className="rounded-xl p-3 flex items-start justify-between gap-2"
+                        className="rounded-xl p-3"
                         style={{
                           background: "oklch(0.18 0.01 265)",
                           border: "1px solid oklch(0.26 0.012 265)",
                         }}
                       >
-                        <div className="flex flex-col gap-1 flex-1 min-w-0">
-                          <span className="text-sm font-semibold text-foreground truncate">
-                            {task.task_name}
-                          </span>
-                          <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex flex-col gap-1.5">
+                          {/* Task name + price row */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-foreground truncate">
+                              {task.task_name}
+                            </span>
                             <span
-                              className="text-xs"
-                              style={{ color: "oklch(0.65 0 0)" }}
+                              className="text-xs font-bold shrink-0"
+                              style={{ color: "oklch(0.78 0.20 295)" }}
                             >
                               ₹{task.price}
                             </span>
+                          </div>
+
+                          {/* Badges row */}
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span
                               className="text-xs px-2 py-0.5 rounded-full"
                               style={{
@@ -2975,37 +3494,66 @@ function ProfileScreen({
                               {task.status || "Active"}
                             </span>
                           </div>
-                          {role === "Hiring" && (
-                            <span
-                              className="text-xs"
-                              style={{ color: "oklch(0.55 0.05 295)" }}
-                            >
-                              {!task.applicants ||
-                              task.applicants.split(",").filter(Boolean)
-                                .length === 0
-                                ? "Waiting for Applicants"
-                                : !task.user_id_recipient
-                                  ? `${task.applicants.split(",").filter((s) => s.trim()).length} Applicant(s) Found`
-                                  : `Performer: @${task.user_id_recipient}`}
-                            </span>
-                          )}
+
+                          {/* Hiring role: applicant list + Select & Pay */}
+                          {role === "Hiring" &&
+                            (!task.applicants ||
+                            task.applicants.split(",").filter((s) => s.trim())
+                              .length === 0 ? (
+                              <span
+                                className="text-xs"
+                                style={{ color: "oklch(0.55 0.05 295)" }}
+                              >
+                                Waiting for Applicants
+                              </span>
+                            ) : (
+                              <HiringActivityCard task={task} />
+                            ))}
+
+                          {/* Working role: status + Start Work button */}
                           {role === "Working" && (
-                            <span
-                              className="text-xs"
-                              style={{
-                                color:
-                                  task.payment_status === "Held by Admin"
-                                    ? "oklch(0.68 0.18 145)"
-                                    : "oklch(0.55 0 0)",
-                              }}
-                            >
-                              {task.payment_status === "Held by Admin"
-                                ? "✅ Start Working!"
-                                : task.payment_status === "Pending"
-                                  ? "Awaiting Admin Verification..."
-                                  : task.status}
-                            </span>
+                            <div className="flex flex-col gap-2 mt-0.5">
+                              <span
+                                className="text-xs"
+                                style={{
+                                  color: isHeld
+                                    ? "oklch(0.72 0.18 145)"
+                                    : "oklch(0.72 0.12 295)",
+                                }}
+                              >
+                                {isHeld
+                                  ? "✅ Payment verified! You can start working."
+                                  : "✅ Hired! Waiting for Admin to verify Poster's payment."}
+                              </span>
+                              <button
+                                type="button"
+                                data-ocid={`activity.${task.task_id}.start_work_button`}
+                                disabled={!isHeld}
+                                onClick={() => {
+                                  if (isHeld)
+                                    toast("Let's go! Start your work.");
+                                }}
+                                className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-all self-start"
+                                style={{
+                                  border: isHeld
+                                    ? "1px solid oklch(0.55 0.20 165 / 0.8)"
+                                    : "1px solid oklch(0.32 0.05 265)",
+                                  color: isHeld
+                                    ? "oklch(0.78 0.22 165)"
+                                    : "oklch(0.42 0 0)",
+                                  background: isHeld
+                                    ? "oklch(0.22 0.08 165 / 0.35)"
+                                    : "oklch(0.18 0.01 265)",
+                                  cursor: isHeld ? "pointer" : "not-allowed",
+                                  opacity: isHeld ? 1 : 0.4,
+                                }}
+                              >
+                                {isHeld ? "▶ Start Work" : "Start Work"}
+                              </button>
+                            </div>
                           )}
+
+                          {/* Applied role: waiting message */}
                           {role === "Applied" && (
                             <span
                               className="text-xs"
