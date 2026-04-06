@@ -1,72 +1,82 @@
-# Proxii – My Activity Poster Flow Update
+# Proxii — History & Stats Build
 
 ## Current State
-- `PostedTaskCard` component (lines ~2092–2260) renders each task the logged-in user posted, with an expandable applicants list.
-- Each applicant shows their `@username` plus an **Accept** button. Clicking Accept shows a green **Confirm** button. Clicking Confirm calls `patchTask` to set `user_id_recipient` and `status: 'Awaiting Payment'`.
-- Applicant names are plain `<span>` elements — not clickable links.
-- There is no Payment Modal. After selecting a performer, the poster sees nothing further in the UI to confirm payment.
-- The `PostedTaskCard` is used inside the **Tasks Posted** stats modal (not inside My Activity directly). My Activity cards are separate read-only cards.
-- `LiveTask` interface already has `user_id_recipient`, `payment_status`, `applicants` fields.
-- `patchTask` helper exists and works correctly.
-- No `upi_username` field is written anywhere.
-- **Worker / performer view** in My Activity (role=Working): currently shows "✅ Start Working!" when `payment_status === 'Held by Admin'`, and "Awaiting Admin Verification..." when `payment_status === 'Pending'`. No disabled-state logic for a Start Work button.
+
+- App is a single `App.tsx` (~4149 lines) with all logic inline.
+- SheetDB API: `https://sheetdb.io/api/v1/m2d47h1nseqog`
+- **Column naming just changed** (user confirmed): the `task` and `task_history` sheets now use `poster_id` (was `user_id_origintor`) and `worker_id` (was `user_id_recipient`) everywhere.
+- `LiveTask` interface currently uses `user_id_origintor` and `user_id_recipient` — these MUST be renamed to `poster_id` and `worker_id` throughout.
+- `TaskHistory` interface currently uses `user_id_origintor` and `user_id_recipient` — same rename needed.
+- My Activity section exists; performers see yellow/green badges but "Mark as Completed" just sets status to 'Completed' without the full review/history flow.
+- Profile stats (Tasks Posted, Tasks Completed, Total Earned, Rating) are partially live but:
+  - 'Tasks Completed' filters `task_history` by `user_id_recipient` (old column) — must switch to `worker_id`
+  - 'Total Earned' only counts `payment_status === 'Paid Out'` — must switch to `payment_status === 'Ready for Admin Payout'`
+  - 'Rating' reads from the `feedback` tab — must now read `rating_score` from `task_history` where `worker_id` matches
+  - Stats drill-down modals exist but are basic — need enhancement per spec
+- No `deleteTask` helper exists yet.
+- No `postTaskHistory` helper exists yet.
+- No rating modal exists yet.
 
 ## Requested Changes (Diff)
 
 ### Add
-1. **Telegram link on applicant names** – In `PostedTaskCard`, each applicant's `@username` should be a clickable `<a>` that fetches the applicant's `telegram_id` from the users sheet and opens `https://t.me/{telegram_id}` in a new tab.
-   - Fetch via: `GET ${SHEETDB}/search?sheet=users&user_id={applicantId}` — use the existing `fetchUserById` function.
-   - On click: call `fetchUserById(applicantId)`, then open the link. Show a brief loading state on the link while fetching.
-   - Sanitize: strip leading `@` from telegram_id before building the URL.
-
-2. **'Select & Pay' button** – Replace the existing **Accept → Confirm** two-step with a single **Select & Pay** button per applicant.
-   - On click:
-     a. Immediately call `patchTask(task.task_id, { user_id_recipient: applicantId, status: 'Awaiting Payment' })`.
-     b. Once the patch succeeds, open the Payment Modal.
-   - While the patch is in-flight, show a loading/spinner state on the button.
-   - Disable the button (and all other applicant buttons) once any performer is selected for this task.
-
-3. **Payment Modal** – A full-screen overlay modal (not the shadcn Dialog; use a fixed overlay div styled to match the dark Midnight theme):
-   - **Header**: Admin UPI ID `neelamperween1@okicici` displayed prominently, with a copy icon next to it. Clicking the icon copies the UPI ID to clipboard and shows a "Copied!" toast.
-   - **Instruction text**: `Transfer ₹{task.price} to Admin. Once paid, enter your UPI Name below.`
-   - **Input field**: Labeled `Your UPI username` — plain text input.
-   - **Submit button** labeled `I Have Paid`:
-     - On click: call `patchTask(task.task_id, { upi_username: <inputValue>, payment_status: 'Pending Verification' })`.
-     - Show loading state while the call is in-flight.
-     - On success: close the modal and show a toast `Payment submitted! Awaiting admin verification.`
-     - Require non-empty input before submitting.
-   - **Close/Cancel**: an `×` button in the top-right corner to close without submitting.
-   - The modal state (open/closed + which task) should be local to `PostedTaskCard` via `useState`.
-
-4. **My Activity – Poster card sub-section for applicants ('Hiring' role)**:
-   - When `role === 'Hiring'` and applicants exist but no performer is yet selected, show an expandable list of applicants inside the My Activity card (same as PostedTaskCard but inline).
-   - Each applicant name is a Telegram link (same logic as above).
-   - Each applicant has a **Select & Pay** button with the same behavior (patch + open payment modal).
-   - My Activity cards should reuse/lift the `PostedTaskCard` logic, or the My Activity section should simply render a `PostedTaskCard` for each Hiring task instead of its own flat card.
-
-5. **Performer (Working) view update**:
-   - When `role === 'Working'` and `payment_status` is NOT `'Held by Admin'`, show: `✅ Hired! Waiting for Admin to verify Poster's payment.`
-   - Replace the text-only status with a visible **Start Work** button that is **disabled** unless `payment_status === 'Held by Admin'`.
-   - Button label: `Start Work`
-   - Disabled styling: reduced opacity + `cursor: not-allowed`.
-   - When enabled (payment_status = 'Held by Admin'), the button should be active/clickable (for now it can just show a toast `Let's go! Start your work.`).
+1. **Column rename throughout**: `user_id_origintor` → `poster_id`, `user_id_recipient` → `worker_id` in ALL interfaces, state variables, JSX references, SheetDB calls, and filter logic.
+2. **`deleteTask(taskId)` helper**: DELETE to `${SHEETDB}/task_id/${taskId}?sheet=task`.
+3. **`postTaskHistory(data)` helper**: POST to SHEETDB with `sheet: 'task_history'`.
+4. **Performer: 'Mark as Done' → 'Waiting for Poster Review' flow**:
+   - Only show button when `payment_status === 'Held by Admin'`.
+   - On click: PATCH task status to `'Waiting for Poster Review'`.
+   - Show message: 'Work submitted! Waiting for the Poster to review and release your payment.'
+   - Hide the Mark as Done button once submitted.
+5. **Poster: 'Review & Release Payment' button**:
+   - Show in My Activity card when `role === 'Hiring'` AND `task.status === 'Waiting for Poster Review'`.
+   - On click: open a **Rating Modal**.
+6. **Rating Modal** (new component):
+   - 1–5 star selector (visual stars, maps to `rating_score`).
+   - Short review text box (maps to `review_text`).
+   - 'Release Payment' confirm button.
+   - On submit:
+     a. POST to `task_history` sheet with columns: `task_id`, `task_name`, `price`, `poster_id`, `worker_id`, `status: 'Completed'`, `completion_date: today's date (YYYY-MM-DD)`, `payment_status: 'Ready for Admin Payout'`, `rating_score`, `review_text`.
+     b. DELETE the row from the `task` sheet.
+     c. Show toast: 'Task Completed! Admin will now transfer ₹[Price] to the Performer.'
+     d. Remove task from local `allTasks` state.
+7. **Profile Stats — fully dynamic**:
+   - **Tasks Posted**: count rows in `allTasks` (poster_id === userId) + rows in `taskHistory` (poster_id === userId), deduplicated by task_id.
+   - **Tasks Completed**: count rows in `taskHistory` where `worker_id === userId`.
+   - **Total Earned**: sum `price` in `taskHistory` where `worker_id === userId` (all rows, not just Paid Out).
+   - **Rating**: average of `rating_score` column in `taskHistory` where `worker_id === userId`; show 'Unrated' if none.
+8. **Stats drill-down modal enhancements**:
+   - **Tasks Posted modal**: show task name, status (Completed / In Progress / Active), price.
+   - **Tasks Completed modal** (rename to 'Tasks Completed'): show `[Task Name] | [completion_date] | [rating_score ⭐]`.
+   - **Total Earned modal** (Earnings Ledger): show task name + ₹amount for each row in `taskHistory` where `worker_id === userId`.
 
 ### Modify
-- `PostedTaskCard`: replace Accept/Confirm two-step with single Select & Pay button, add telegram link to applicant names, add payment modal state.
-- My Activity section in `ProfileScreen`: update `role === 'Working'` display and `role === 'Hiring'` applicant list rendering.
-- `LiveTask` interface: ensure `upi_username` is typed (add optional field `upi_username?: string`).
+- `LiveTask` interface: rename `user_id_origintor` → `poster_id`, `user_id_recipient` → `worker_id`.
+- `TaskHistory` interface: rename `user_id_origintor` → `poster_id`, `user_id_recipient` → `worker_id`. Add `review_text?: string`.
+- All SheetDB PATCH calls that reference `user_id_recipient` or `user_id_origintor` → update to `worker_id` / `poster_id`.
+- `PostedTaskCard` and `HiringActivityCard` components: update all field references to use new column names.
+- `patchTask` in select-and-pay: sets `worker_id` (was `user_id_recipient`).
+- `ProfileScreen` computed values: update all filter predicates to use `poster_id` / `worker_id`.
+- `PostTaskForm`: `user_id_origintor` field in the POST body → rename to `poster_id`.
+- `TaskDetailModal`: update `isMyTask` check and all references from `user_id_origintor` → `poster_id`, `user_id_recipient` → `worker_id`.
+- `fetchTaskHistory` return type updated for new interface.
+- `completedTasks` filter: `t.worker_id === userId` (was `t.user_id_recipient`).
+- `totalEarned`: sum ALL rows in taskHistory where `worker_id === userId`, not just 'Paid Out'.
+- Rating calculation: read `rating_score` from `taskHistory` (not the `feedback` tab), filtered by `worker_id === userId`.
+- Performer 'Mark as Done' onClick: change status to `'Waiting for Poster Review'` (was 'Completed').
 
 ### Remove
-- The Accept button and the two-step Accept → Confirm pattern in `PostedTaskCard`.
-- The `acceptingId` state in `PostedTaskCard` (no longer needed).
+- Rating reads from the `feedback` tab (`FeedbackRow`, `fetchFeedback`) — still keep the function and type for the TaskDetailModal poster profile rating display, but profile stats rating should now use `task_history.rating_score`.
 
 ## Implementation Plan
-1. Add `upi_username?: string` to `LiveTask` interface.
-2. Rewrite `PostedTaskCard`:
-   a. Remove `acceptingId` state.
-   b. Add `paymentModalOpen` state (boolean) and `paymentUpi` input state.
-   c. Change applicant `@username` to a clickable element that fetches telegram_id and opens link.
-   d. Replace Accept/Confirm with single `Select & Pay` button calling patch then opening modal.
-   e. Render payment modal overlay when `paymentModalOpen === true`.
-3. Update My Activity `role === 'Working'` block: change status text + add disabled Start Work button.
-4. Update My Activity `role === 'Hiring'` block: when applicants exist, render applicant rows with Telegram links and Select & Pay buttons (or embed PostedTaskCard directly).
+
+1. Rename column fields in interfaces (`LiveTask`, `TaskHistory`) and all downstream usages — do a careful global search-replace across the file.
+2. Add `deleteTask` and `postTaskHistory` SheetDB helper functions.
+3. Update `PostTaskForm` POST body: `poster_id` instead of `user_id_origintor`.
+4. Update `TaskDetailModal` field references.
+5. Update `PostedTaskCard` / `HiringActivityCard` field references and select-and-pay PATCH.
+6. In My Activity performer view: change 'Mark as Done' to PATCH status `'Waiting for Poster Review'`, show submission message.
+7. In My Activity poster view (Hiring cards): detect `task.status === 'Waiting for Poster Review'` → show 'Review & Release Payment' button.
+8. Build `RatingModal` component with star selector, review text, and 'Release Payment' submit that calls postTaskHistory + deleteTask + updates local state.
+9. Update all profile stats computed values (Tasks Posted, Completed, Earned, Rating) to use correct fields and sheets.
+10. Update the three drill-down modals to match the new display requirements.

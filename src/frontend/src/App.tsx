@@ -42,9 +42,9 @@ interface LiveTask {
   status: string;
   deadline: string;
   category?: string;
-  user_id_origintor?: string;
+  poster_id?: string;
   applicants?: string;
-  user_id_recipient?: string;
+  worker_id?: string;
   payment_status?: string;
   upi_username?: string;
 }
@@ -63,19 +63,19 @@ interface UserRow {
 interface TaskHistory {
   task_id: string;
   task_name: string;
-  user_id_origintor: string;
-  user_id_recipient: string;
+  poster_id: string;
+  worker_id: string;
   status: string;
   completion_date: string;
   payment_status: string;
   price: string;
   rating_score: string;
+  review_text?: string;
 }
 
 interface FeedbackRow {
   task_id: string;
   worker_id?: string;
-  user_id_recipient?: string;
   rating: string;
 }
 
@@ -213,6 +213,23 @@ async function patchTask(taskId: string, data: object) {
     const errText = await res.text().catch(() => "");
     throw new Error(`Failed to update task: ${res.status} ${errText}`);
   }
+}
+
+async function deleteTask(taskId: string) {
+  const res = await fetchWithTimeout(
+    `${SHEETDB}/task_id/${encodeURIComponent(taskId)}?sheet=task`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error("Failed to delete task");
+}
+
+async function postTaskHistory(data: object) {
+  const res = await fetchWithTimeout(SHEETDB, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet: "task_history", data: [data] }),
+  });
+  if (!res.ok) throw new Error("Failed to post task history");
 }
 
 // ── Design constants ─────────────────────────────────────────────────────────
@@ -518,7 +535,7 @@ function TaskCardComponent({
   currentUserId: string | null;
   onOpen: (task: LiveTask) => void;
 }) {
-  const isMyTask = currentUserId && task.user_id_origintor === currentUserId;
+  const isMyTask = currentUserId && task.poster_id === currentUserId;
   const catStyle = task.category
     ? (CATEGORY_STYLES[task.category] ?? CATEGORY_STYLES.Other)
     : null;
@@ -618,15 +635,15 @@ function TaskDetailModal({
   });
   const [requestLoading, setRequestLoading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
-  const isMyTask = currentUserId && task.user_id_origintor === currentUserId;
+  const isMyTask = currentUserId && task.poster_id === currentUserId;
 
   useEffect(() => {
-    if (!task.user_id_origintor) {
+    if (!task.poster_id) {
       setPosterLoading(false);
       return;
     }
     Promise.all([
-      fetchUserById(task.user_id_origintor),
+      fetchUserById(task.poster_id),
       fetchTaskHistory(),
       fetchFeedback(),
     ])
@@ -634,26 +651,24 @@ function TaskDetailModal({
         setPosterInfo(user);
         setPosterHistory(
           history.filter(
-            (h) =>
-              h.user_id_recipient === (user?.user_id ?? task.user_id_origintor),
+            (h) => h.worker_id === (user?.user_id ?? task.poster_id),
           ),
         );
         setModalFeedbackRows(feedback);
       })
       .catch(() => {})
       .finally(() => setPosterLoading(false));
-  }, [task.user_id_origintor]);
+  }, [task.poster_id]);
 
   const posterTasksCount = allTasks.filter(
-    (t) => t.user_id_origintor === task.user_id_origintor,
+    (t) => t.poster_id === task.poster_id,
   ).length;
 
   const ratings = modalFeedbackRows
     .filter(
       (r) =>
-        (r.user_id_recipient ===
-          (posterInfo?.user_id ?? task.user_id_origintor) ||
-          r.worker_id === (posterInfo?.user_id ?? task.user_id_origintor)) &&
+        (r.worker_id === (posterInfo?.user_id ?? task.poster_id) ||
+          r.worker_id === (posterInfo?.user_id ?? task.poster_id)) &&
         r.rating &&
         !Number.isNaN(Number.parseFloat(r.rating)),
     )
@@ -699,8 +714,8 @@ function TaskDetailModal({
     setChatLoading(true);
     try {
       let handle = posterInfo?.telegram_id?.replace(/^@/, "");
-      if (!handle && task.user_id_origintor) {
-        const user = await fetchUserById(task.user_id_origintor);
+      if (!handle && task.poster_id) {
+        const user = await fetchUserById(task.poster_id);
         handle = user?.telegram_id?.replace(/^@/, "");
       }
       if (handle) {
@@ -929,7 +944,7 @@ function TaskDetailModal({
                   }}
                 >
                   {posterInfo?.full_name?.charAt(0)?.toUpperCase() ??
-                    task.user_id_origintor?.charAt(0)?.toUpperCase() ??
+                    task.poster_id?.charAt(0)?.toUpperCase() ??
                     "?"}
                 </div>
                 <div className="flex flex-col gap-0.5 flex-1 min-w-0">
@@ -937,15 +952,13 @@ function TaskDetailModal({
                     className="text-sm font-semibold truncate"
                     style={{ color: "oklch(0.92 0 0)" }}
                   >
-                    {posterInfo?.full_name ??
-                      task.user_id_origintor ??
-                      "Unknown"}
+                    {posterInfo?.full_name ?? task.poster_id ?? "Unknown"}
                   </span>
                   <span
                     className="text-xs"
                     style={{ color: "oklch(0.55 0 0)" }}
                   >
-                    @{posterInfo?.user_id ?? task.user_id_origintor}
+                    @{posterInfo?.user_id ?? task.poster_id}
                   </span>
                   <div className="flex items-center gap-3 mt-0.5 flex-wrap">
                     <span
@@ -1776,7 +1789,7 @@ function PostTaskScreen({
       const randStr = Math.random().toString(36).slice(2, 7);
       await postTask({
         task_id: `task_${randStr}`,
-        user_id_origintor: userId,
+        poster_id: userId,
         task_name: fields.title,
         price: fields.price,
         status: "active",
@@ -1795,7 +1808,7 @@ function PostTaskScreen({
         status: "active",
         deadline: fields.deadline,
         category: fields.category,
-        user_id_origintor: userId,
+        poster_id: userId,
       };
       onTaskPosted?.(newTask);
       setLastTask(fields);
@@ -2094,9 +2107,384 @@ function PostTaskScreen({
 
 // ── Profile Screen ────────────────────────────────────────────────────────────
 
+// ── Mark Done Button ─────────────────────────────────────────────────────────
+function MarkDoneButton({
+  task,
+  setAllTasks,
+}: {
+  task: LiveTask;
+  setAllTasks: React.Dispatch<React.SetStateAction<LiveTask[]>>;
+}) {
+  const [marking, setMarking] = useState(false);
+  const [done, setDone] = useState(false);
+
+  if (done || task.status === "Waiting for Poster Review") {
+    return (
+      <span
+        className="text-xs px-2.5 py-1 rounded-lg font-semibold self-start"
+        style={{
+          background: "oklch(0.22 0.08 200 / 0.25)",
+          color: "oklch(0.72 0.15 200)",
+          border: "1px solid oklch(0.45 0.12 200 / 0.5)",
+        }}
+      >
+        ✔ Work Submitted! Waiting for the Poster to review.
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-ocid={`activity.${task.task_id}.mark_completed_button`}
+      disabled={marking}
+      onClick={async () => {
+        setMarking(true);
+        try {
+          await patchTask(task.task_id, {
+            status: "Waiting for Poster Review",
+          });
+          setDone(true);
+          setAllTasks((prev) =>
+            prev.map((t) =>
+              t.task_id === task.task_id
+                ? { ...t, status: "Waiting for Poster Review" }
+                : t,
+            ),
+          );
+          toast(
+            "Work submitted! Waiting for the Poster to review and release your payment.",
+          );
+        } catch {
+          toast("Failed to update. Please try again.");
+        } finally {
+          setMarking(false);
+        }
+      }}
+      className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-all self-start flex items-center gap-1"
+      style={{
+        border: "1px solid oklch(0.55 0.20 165 / 0.8)",
+        color: "oklch(0.78 0.22 165)",
+        background: "oklch(0.22 0.08 165 / 0.35)",
+        cursor: marking ? "not-allowed" : "pointer",
+        opacity: marking ? 0.6 : 1,
+      }}
+    >
+      {marking ? (
+        <>
+          <Loader2 className="w-3 h-3 animate-spin" /> Submitting...
+        </>
+      ) : (
+        "✔ Mark as Completed"
+      )}
+    </button>
+  );
+}
+
+// ── Rating Modal ──────────────────────────────────────────────────────────────
+function RatingModal({
+  task,
+  onClose,
+  onComplete,
+  setAllTasks,
+}: {
+  task: LiveTask;
+  onClose: () => void;
+  onComplete: () => void;
+  setAllTasks: React.Dispatch<React.SetStateAction<LiveTask[]>>;
+}) {
+  const [rating, setRating] = useState<number>(0);
+  const [review, setReview] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleRelease() {
+    if (rating === 0) return;
+    setLoading(true);
+    try {
+      const todayDate = new Date().toISOString().split("T")[0];
+      await postTaskHistory({
+        task_id: task.task_id,
+        task_name: task.task_name,
+        price: task.price,
+        poster_id: task.poster_id,
+        worker_id: task.worker_id,
+        status: "Completed",
+        completion_date: todayDate,
+        payment_status: "Ready for Admin Payout",
+        rating_score: String(rating),
+        review_text: review,
+      });
+      await deleteTask(task.task_id);
+      setAllTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
+      onComplete();
+      onClose();
+    } catch {
+      toast.error("Failed to complete task. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      data-ocid="rating.modal"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 300,
+        background: "oklch(0.05 0 0 / 0.92)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+        backdropFilter: "blur(6px)",
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
+    >
+      <div
+        style={{
+          background: "oklch(0.16 0.01 265)",
+          border: "1px solid oklch(0.28 0.012 265)",
+          borderRadius: "1.25rem",
+          padding: "1.5rem",
+          width: "100%",
+          maxWidth: "420px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1.25rem",
+          boxShadow: "0 0 40px oklch(0.40 0.22 145 / 0.15)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        aria-modal="true"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-foreground">
+              Rate & Release Payment
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: "oklch(0.60 0 0)" }}>
+              Task: {task.task_name}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-ocid="rating.close_button"
+            onClick={onClose}
+            style={{
+              background: "oklch(0.20 0.01 265)",
+              border: "1px solid oklch(0.28 0.012 265)",
+              color: "oklch(0.70 0 0)",
+              borderRadius: "0.5rem",
+              padding: "0.25rem 0.5rem",
+              cursor: "pointer",
+              fontSize: "1rem",
+              lineHeight: 1,
+            }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Star selector */}
+        <div className="flex flex-col gap-2">
+          <p
+            className="text-xs font-medium"
+            style={{ color: "oklch(0.70 0.08 295)" }}
+          >
+            Rate the Worker{" "}
+            <span style={{ color: "oklch(0.65 0.22 15)" }}>*</span>
+          </p>
+          <div className="flex items-center gap-2">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                type="button"
+                data-ocid={`rating.star.${star}`}
+                onClick={() => setRating(star)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: "2rem",
+                  lineHeight: 1,
+                  color:
+                    star <= rating ? "oklch(0.82 0.20 85)" : "oklch(0.35 0 0)",
+                  transition: "color 0.15s ease, transform 0.1s ease",
+                  transform: star <= rating ? "scale(1.1)" : "scale(1)",
+                  padding: "0.25rem",
+                }}
+                aria-label={`Rate ${star} star${star !== 1 ? "s" : ""}`}
+              >
+                ★
+              </button>
+            ))}
+          </div>
+          {rating > 0 && (
+            <p className="text-xs" style={{ color: "oklch(0.65 0.12 85)" }}>
+              {["", "Poor", "Fair", "Good", "Very Good", "Excellent"][rating]}
+            </p>
+          )}
+        </div>
+
+        {/* Review textarea */}
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="rating-review"
+            className="text-xs font-medium"
+            style={{ color: "oklch(0.70 0.08 295)" }}
+          >
+            Short Review (optional)
+          </label>
+          <textarea
+            id="rating-review"
+            data-ocid="rating.textarea"
+            value={review}
+            onChange={(e) => setReview(e.target.value)}
+            placeholder="Write a short review (optional)"
+            rows={3}
+            style={{
+              background: "oklch(0.12 0.01 265)",
+              border: "1px solid oklch(0.28 0.015 265)",
+              color: "oklch(0.92 0 0)",
+              borderRadius: "0.75rem",
+              padding: "0.625rem 0.875rem",
+              width: "100%",
+              fontSize: "0.875rem",
+              outline: "none",
+              resize: "vertical",
+              minHeight: "80px",
+              fontFamily: "inherit",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.border =
+                "1px solid oklch(0.55 0.22 295 / 0.8)";
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.border = "1px solid oklch(0.28 0.015 265)";
+            }}
+          />
+        </div>
+
+        {/* Release button */}
+        <button
+          type="button"
+          data-ocid="rating.confirm_button"
+          disabled={rating === 0 || loading}
+          onClick={handleRelease}
+          className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all flex items-center justify-center gap-2"
+          style={{
+            background:
+              rating === 0 || loading
+                ? "oklch(0.22 0.05 145 / 0.4)"
+                : "linear-gradient(135deg, oklch(0.45 0.18 145), oklch(0.52 0.20 165))",
+            color: rating === 0 || loading ? "oklch(0.50 0 0)" : "white",
+            cursor: rating === 0 || loading ? "not-allowed" : "pointer",
+            border: "none",
+            boxShadow:
+              rating > 0 && !loading
+                ? "0 0 20px oklch(0.40 0.18 145 / 0.30)"
+                : "none",
+          }}
+        >
+          {loading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Processing...
+            </>
+          ) : (
+            <>
+              <CheckCircle2 className="w-4 h-4" />
+              Release Payment & Complete Task
+            </>
+          )}
+        </button>
+
+        <p className="text-xs text-center" style={{ color: "oklch(0.48 0 0)" }}>
+          Admin will transfer ₹{task.price} to the worker upon your
+          confirmation.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Hiring Role Content ──────────────────────────────────────────────────────
+function HiringRoleContent({
+  task,
+  setAllTasks,
+}: {
+  task: LiveTask;
+  setAllTasks: React.Dispatch<React.SetStateAction<LiveTask[]>>;
+}) {
+  const [ratingModalOpen, setRatingModalOpen] = useState(false);
+  const waitingForReview = task.status === "Waiting for Poster Review";
+
+  return (
+    <>
+      {waitingForReview ? (
+        <div className="flex flex-col gap-2 mt-0.5">
+          <span
+            className="text-xs px-2.5 py-1 rounded-lg font-semibold self-start"
+            style={{
+              background: "oklch(0.25 0.10 265 / 0.35)",
+              color: "oklch(0.80 0.18 295)",
+              border: "1px solid oklch(0.52 0.18 295 / 0.6)",
+            }}
+          >
+            🎯 Worker marked task as done! Review to release payment.
+          </span>
+          <button
+            type="button"
+            data-ocid={`activity.${task.task_id}.review_release_button`}
+            onClick={() => setRatingModalOpen(true)}
+            className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-all self-start flex items-center gap-1"
+            style={{
+              border: "1px solid oklch(0.52 0.18 145 / 0.8)",
+              color: "oklch(0.78 0.22 145)",
+              background: "oklch(0.20 0.08 145 / 0.35)",
+              cursor: "pointer",
+            }}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Review & Release Payment
+          </button>
+        </div>
+      ) : !task.applicants ||
+        task.applicants.split(",").filter((s) => s.trim()).length === 0 ? (
+        <span className="text-xs" style={{ color: "oklch(0.55 0.05 295)" }}>
+          Waiting for Applicants
+        </span>
+      ) : (
+        <HiringActivityCard task={task} />
+      )}
+
+      {ratingModalOpen && (
+        <RatingModal
+          task={task}
+          onClose={() => setRatingModalOpen(false)}
+          setAllTasks={setAllTasks}
+          onComplete={() => {
+            toast(
+              `Task Completed! Admin will now transfer ₹${task.price} to the Performer.`,
+            );
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 function HiringActivityCard({ task }: { task: LiveTask }) {
   const [selectedPerformer, setSelectedPerformer] = useState<string | null>(
-    task.user_id_recipient ?? null,
+    task.worker_id ?? null,
   );
   const [selectingId, setSelectingId] = useState<string | null>(null);
   const [loadingTelegram, setLoadingTelegram] = useState<
@@ -2117,7 +2505,7 @@ function HiringActivityCard({ task }: { task: LiveTask }) {
     setSelectingId(applicantId);
     try {
       await patchTask(task.task_id, {
-        user_id_recipient: applicantId,
+        worker_id: applicantId,
         status: "Awaiting Payment",
       });
       setSelectedPerformer(applicantId);
@@ -2164,7 +2552,7 @@ function HiringActivityCard({ task }: { task: LiveTask }) {
     }
   }
 
-  const isLocked = !!(task.user_id_recipient || selectedPerformer);
+  const isLocked = !!(task.worker_id || selectedPerformer);
   const hasApplicants = applicantList.length > 0;
 
   return (
@@ -2232,7 +2620,7 @@ function HiringActivityCard({ task }: { task: LiveTask }) {
           className="text-xs mt-1"
           style={{ color: "oklch(0.55 0.05 295)" }}
         >
-          Performer: @{task.user_id_recipient || selectedPerformer}
+          Performer: @{task.worker_id || selectedPerformer}
         </span>
       )}
 
@@ -2404,376 +2792,6 @@ function HiringActivityCard({ task }: { task: LiveTask }) {
   );
 }
 
-function PostedTaskCard({ task, index }: { task: LiveTask; index: number }) {
-  const [selectedPerformer, setSelectedPerformer] = useState<string | null>(
-    task.user_id_recipient ?? null,
-  );
-  const [selectingId, setSelectingId] = useState<string | null>(null);
-  const [successId, setSuccessId] = useState<string | null>(null);
-  const [loadingTelegram, setLoadingTelegram] = useState<
-    Record<string, boolean>
-  >({});
-  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
-  const [paymentUpiInput, setPaymentUpiInput] = useState("");
-  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
-
-  const applicantList = task.applicants
-    ? task.applicants
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
-
-  async function handleSelectAndPay(applicantId: string) {
-    setSelectingId(applicantId);
-    try {
-      await patchTask(task.task_id, {
-        user_id_recipient: applicantId,
-        status: "Awaiting Payment",
-      });
-      setSuccessId(applicantId);
-      setSelectedPerformer(applicantId);
-      setPaymentModalOpen(true);
-    } catch {
-      toast.error("Failed to select performer. Try again.");
-    } finally {
-      setSelectingId(null);
-    }
-  }
-
-  async function handleOpenTelegram(applicantId: string) {
-    setLoadingTelegram((prev) => ({ ...prev, [applicantId]: true }));
-    try {
-      const user = await fetchUserById(applicantId);
-      if (user?.telegram_id) {
-        const tgId = user.telegram_id.replace(/^@/, "");
-        window.open(`https://t.me/${tgId}`, "_blank");
-      } else {
-        toast.error("Telegram ID not found for this user.");
-      }
-    } catch {
-      toast.error("Could not fetch user info.");
-    } finally {
-      setLoadingTelegram((prev) => ({ ...prev, [applicantId]: false }));
-    }
-  }
-
-  async function handlePaymentSubmit() {
-    if (!paymentUpiInput.trim()) return;
-    setPaymentSubmitting(true);
-    try {
-      await patchTask(task.task_id, {
-        upi_username: paymentUpiInput.trim(),
-        payment_status: "Pending Verification",
-      });
-      toast.success("Payment submitted! Awaiting admin verification.");
-      setPaymentModalOpen(false);
-      setPaymentUpiInput("");
-    } catch {
-      toast.error("Failed to submit. Try again.");
-    } finally {
-      setPaymentSubmitting(false);
-    }
-  }
-
-  const isLocked = !!(task.user_id_recipient || selectedPerformer);
-
-  return (
-    <div
-      data-ocid={`profile.posted.item.${index + 1}`}
-      className="rounded-xl p-3 space-y-2"
-      style={{
-        background: "oklch(0.18 0.01 265)",
-        border: "1px solid oklch(0.28 0.012 265)",
-      }}
-    >
-      <div className="flex justify-between">
-        <span className="text-sm font-semibold text-foreground">
-          {task.task_name}
-        </span>
-        <span
-          className="text-xs font-bold"
-          style={{ color: "oklch(0.78 0.20 295)" }}
-        >
-          ₹{task.price}
-        </span>
-      </div>
-      <span
-        className="text-xs px-2 py-0.5 rounded-full inline-block"
-        style={{
-          background: "oklch(0.22 0.05 265 / 0.4)",
-          color: "oklch(0.70 0.05 265)",
-        }}
-      >
-        {task.status || "Active"}
-      </span>
-
-      {/* Applicants section */}
-      <div className="pt-1">
-        <span
-          className="text-xs font-semibold"
-          style={{ color: "oklch(0.60 0.10 295)" }}
-        >
-          Applicants
-        </span>
-        {applicantList.length === 0 ? (
-          <p className="text-xs text-muted-foreground mt-1">
-            No applicants yet
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1.5 mt-1.5">
-            {applicantList.map((applicantId) => (
-              <div
-                key={applicantId}
-                className="flex items-center justify-between rounded-lg px-2 py-1.5 gap-2"
-                style={{
-                  background: "oklch(0.15 0.01 265)",
-                  border: "1px solid oklch(0.26 0.012 265)",
-                }}
-              >
-                {/* Telegram link for applicant name */}
-                <button
-                  type="button"
-                  onClick={() => handleOpenTelegram(applicantId)}
-                  disabled={loadingTelegram[applicantId]}
-                  className="text-xs font-medium flex items-center gap-1 transition-all"
-                  style={{
-                    color: "oklch(0.72 0.18 295)",
-                    textDecoration: "underline",
-                    textUnderlineOffset: "2px",
-                    background: "transparent",
-                    border: "none",
-                    cursor: loadingTelegram[applicantId] ? "wait" : "pointer",
-                    padding: 0,
-                  }}
-                >
-                  {loadingTelegram[applicantId] ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : null}
-                  @{applicantId}
-                </button>
-
-                {/* Select & Pay or Selected indicator */}
-                {successId === applicantId ||
-                selectedPerformer === applicantId ||
-                task.user_id_recipient === applicantId ? (
-                  <span
-                    className="text-xs font-bold px-2 py-0.5 rounded-full shrink-0"
-                    style={{
-                      color: "oklch(0.72 0.18 150)",
-                      background: "oklch(0.18 0.05 150 / 0.3)",
-                    }}
-                  >
-                    ✓ Selected
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={isLocked || selectingId === applicantId}
-                    onClick={() => handleSelectAndPay(applicantId)}
-                    className="text-xs px-2 py-0.5 rounded-full transition-all shrink-0 flex items-center gap-1"
-                    style={{
-                      border: "1px solid oklch(0.55 0.22 295 / 0.7)",
-                      color: isLocked
-                        ? "oklch(0.45 0.05 295)"
-                        : "oklch(0.78 0.20 295)",
-                      background: isLocked
-                        ? "transparent"
-                        : "oklch(0.22 0.08 295 / 0.3)",
-                      cursor: isLocked ? "not-allowed" : "pointer",
-                      opacity: isLocked ? 0.4 : 1,
-                    }}
-                  >
-                    {selectingId === applicantId ? (
-                      <>
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        Working...
-                      </>
-                    ) : (
-                      "Select & Pay"
-                    )}
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Payment Modal */}
-      {paymentModalOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 200,
-            background: "oklch(0.05 0 0 / 0.88)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "1rem",
-          }}
-          onClick={() => setPaymentModalOpen(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setPaymentModalOpen(false);
-          }}
-          role="presentation"
-        >
-          <div
-            style={{
-              background: "oklch(0.16 0.01 265)",
-              border: "1px solid oklch(0.28 0.012 265)",
-              borderRadius: "1.25rem",
-              padding: "1.5rem",
-              width: "100%",
-              maxWidth: "400px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "1rem",
-            }}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
-            aria-modal="true"
-            data-ocid="payment.modal"
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-foreground">
-                Complete Payment
-              </h3>
-              <button
-                type="button"
-                data-ocid="payment.close_button"
-                onClick={() => setPaymentModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground p-1 rounded-full transition-colors"
-                style={{ background: "oklch(0.22 0.01 265)" }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* UPI ID row */}
-            <div>
-              <p className="text-xs text-muted-foreground mb-1.5">
-                Admin UPI ID
-              </p>
-              <div
-                className="flex items-center justify-between rounded-xl px-3 py-2.5"
-                style={{
-                  background: "oklch(0.12 0.01 265)",
-                  border: "1px solid oklch(0.30 0.015 295 / 0.6)",
-                }}
-              >
-                <span
-                  className="text-sm font-semibold font-mono"
-                  style={{ color: "oklch(0.82 0.18 295)" }}
-                >
-                  neelamperween1@okicici
-                </span>
-                <button
-                  type="button"
-                  data-ocid="payment.copy_upi_button"
-                  onClick={() => {
-                    navigator.clipboard.writeText("neelamperween1@okicici");
-                    toast("Copied UPI ID!");
-                  }}
-                  className="ml-2 p-1 rounded-lg transition-colors"
-                  style={{
-                    color: "oklch(0.65 0.12 295)",
-                    background: "oklch(0.20 0.05 295 / 0.3)",
-                  }}
-                  title="Copy UPI ID"
-                >
-                  <Copy className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Instruction */}
-            <p
-              className="text-xs leading-relaxed"
-              style={{ color: "oklch(0.60 0 0)" }}
-            >
-              Transfer{" "}
-              <span style={{ color: "oklch(0.82 0.18 295)", fontWeight: 600 }}>
-                ₹{task.price}
-              </span>{" "}
-              to Admin. Once paid, enter your UPI Name below.
-            </p>
-
-            {/* UPI username input */}
-            <div className="flex flex-col gap-1.5">
-              <label
-                htmlFor="upi-username-input"
-                className="text-xs font-medium"
-                style={{ color: "oklch(0.70 0.08 295)" }}
-              >
-                Your UPI username
-              </label>
-              <input
-                id="upi-username-input"
-                type="text"
-                data-ocid="payment.input"
-                value={paymentUpiInput}
-                onChange={(e) => setPaymentUpiInput(e.target.value)}
-                placeholder="e.g. yourname@upi"
-                className="w-full rounded-xl px-3 py-2.5 text-sm outline-none transition-all"
-                style={{
-                  background: "oklch(0.12 0.01 265)",
-                  border: "1px solid oklch(0.28 0.015 265)",
-                  color: "oklch(0.92 0 0)",
-                  boxShadow: "none",
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.style.border =
-                    "1px solid oklch(0.55 0.22 295 / 0.8)";
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.border =
-                    "1px solid oklch(0.28 0.015 265)";
-                }}
-              />
-            </div>
-
-            {/* Submit button */}
-            <button
-              type="button"
-              data-ocid="payment.submit_button"
-              disabled={!paymentUpiInput.trim() || paymentSubmitting}
-              onClick={handlePaymentSubmit}
-              className="w-full rounded-xl py-2.5 text-sm font-semibold transition-all flex items-center justify-center gap-2"
-              style={{
-                background:
-                  !paymentUpiInput.trim() || paymentSubmitting
-                    ? "oklch(0.25 0.05 295 / 0.5)"
-                    : "oklch(0.55 0.22 295)",
-                color:
-                  !paymentUpiInput.trim() || paymentSubmitting
-                    ? "oklch(0.55 0 0)"
-                    : "white",
-                cursor:
-                  !paymentUpiInput.trim() || paymentSubmitting
-                    ? "not-allowed"
-                    : "pointer",
-                border: "none",
-              }}
-            >
-              {paymentSubmitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Submitting...
-                </>
-              ) : (
-                "I Have Paid"
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ProfileScreen({
   userId,
   onLogout,
@@ -2801,7 +2819,7 @@ function ProfileScreen({
   const cachedRef = useRef<UserRow | null>(null);
   const [taskHistory, setTaskHistory] = useState<TaskHistory[]>([]);
   const [allTasks, setAllTasks] = useState<LiveTask[]>([]);
-  const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
+  const [_feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([]);
   const [activeModal, setActiveModal] = useState<
     "posted" | "completed" | "earned" | null
   >(null);
@@ -2894,35 +2912,29 @@ function ProfileScreen({
   }
 
   const postedTasks = [
-    ...allTasks.filter((t) => t.user_id_origintor === userId),
-    ...taskHistory.filter((t) => t.user_id_origintor === userId),
+    ...allTasks.filter((t) => t.poster_id === userId),
+    ...taskHistory.filter((t) => t.poster_id === userId),
   ];
   const postedTasksDeduped = Array.from(
     new Map(postedTasks.map((t) => [t.task_id, t])).values(),
   );
 
-  const completedTasks = taskHistory.filter(
-    (t) => t.user_id_recipient === userId,
-  );
-  const paidOutTasks = taskHistory.filter(
-    (t) => t.user_id_recipient === userId && t.payment_status === "Paid Out",
-  );
-  const totalEarned = paidOutTasks.reduce(
-    (sum, t) => sum + (Number.parseFloat(t.price) || 0),
-    0,
-  );
+  const completedTasks = taskHistory.filter((t) => t.worker_id === userId);
+  const totalEarned = taskHistory
+    .filter((t) => t.worker_id === userId)
+    .reduce((sum, t) => sum + (Number.parseFloat(t.price) || 0), 0);
 
-  const ratings = feedbackRows
+  const historyRatings = taskHistory
     .filter(
-      (r) =>
-        (r.user_id_recipient === userId || r.worker_id === userId) &&
-        r.rating &&
-        !Number.isNaN(Number.parseFloat(r.rating)),
+      (t) =>
+        t.worker_id === userId &&
+        t.rating_score &&
+        !Number.isNaN(Number.parseFloat(t.rating_score)),
     )
-    .map((r) => Number.parseFloat(r.rating));
+    .map((t) => Number.parseFloat(t.rating_score));
   const avgRating =
-    ratings.length > 0
-      ? ratings.reduce((a, b) => a + b, 0) / ratings.length
+    historyRatings.length > 0
+      ? historyRatings.reduce((a, b) => a + b, 0) / historyRatings.length
       : null;
 
   function renderStars(rating: number): string {
@@ -3377,15 +3389,15 @@ function ProfileScreen({
         {/* My Activity */}
         {(() => {
           const activeAsHiring = allTasks.filter(
-            (t) => t.user_id_origintor === userId && t.status !== "Completed",
+            (t) => t.poster_id === userId && t.status !== "Completed",
           );
           const activeAsWorking = allTasks.filter(
-            (t) => t.user_id_recipient === userId && t.status !== "Completed",
+            (t) => t.worker_id === userId && t.status !== "Completed",
           );
           const activeApplied = allTasks.filter(
             (t) =>
-              t.user_id_origintor !== userId &&
-              !t.user_id_recipient &&
+              t.poster_id !== userId &&
+              !t.worker_id &&
               t.applicants
                 ?.split(",")
                 .map((s) => s.trim())
@@ -3448,6 +3460,8 @@ function ProfileScreen({
                               border: "1px solid oklch(0.45 0.12 75 / 0.5)",
                             };
                     const isHeld = task.payment_status === "Held by Admin";
+                    const isPending =
+                      task.payment_status === "Pending Verification";
                     return (
                       <div
                         key={task.task_id}
@@ -3496,60 +3510,65 @@ function ProfileScreen({
                           </div>
 
                           {/* Hiring role: applicant list + Select & Pay */}
-                          {role === "Hiring" &&
-                            (!task.applicants ||
-                            task.applicants.split(",").filter((s) => s.trim())
-                              .length === 0 ? (
-                              <span
-                                className="text-xs"
-                                style={{ color: "oklch(0.55 0.05 295)" }}
-                              >
-                                Waiting for Applicants
-                              </span>
-                            ) : (
-                              <HiringActivityCard task={task} />
-                            ))}
+                          {role === "Hiring" && (
+                            <HiringRoleContent
+                              task={task}
+                              setAllTasks={setAllTasks}
+                            />
+                          )}
 
-                          {/* Working role: status + Start Work button */}
+                          {/* Working role: status + action */}
                           {role === "Working" && (
                             <div className="flex flex-col gap-2 mt-0.5">
-                              <span
-                                className="text-xs"
-                                style={{
-                                  color: isHeld
-                                    ? "oklch(0.72 0.18 145)"
-                                    : "oklch(0.72 0.12 295)",
-                                }}
-                              >
-                                {isHeld
-                                  ? "✅ Payment verified! You can start working."
-                                  : "✅ Hired! Waiting for Admin to verify Poster's payment."}
-                              </span>
-                              <button
-                                type="button"
-                                data-ocid={`activity.${task.task_id}.start_work_button`}
-                                disabled={!isHeld}
-                                onClick={() => {
-                                  if (isHeld)
-                                    toast("Let's go! Start your work.");
-                                }}
-                                className="text-xs px-3 py-1.5 rounded-xl font-semibold transition-all self-start"
-                                style={{
-                                  border: isHeld
-                                    ? "1px solid oklch(0.55 0.20 165 / 0.8)"
-                                    : "1px solid oklch(0.32 0.05 265)",
-                                  color: isHeld
-                                    ? "oklch(0.78 0.22 165)"
-                                    : "oklch(0.42 0 0)",
-                                  background: isHeld
-                                    ? "oklch(0.22 0.08 165 / 0.35)"
-                                    : "oklch(0.18 0.01 265)",
-                                  cursor: isHeld ? "pointer" : "not-allowed",
-                                  opacity: isHeld ? 1 : 0.4,
-                                }}
-                              >
-                                {isHeld ? "▶ Start Work" : "Start Work"}
-                              </button>
+                              {isPending && (
+                                <span
+                                  className="text-xs px-2.5 py-1 rounded-lg font-semibold self-start"
+                                  style={{
+                                    background: "oklch(0.32 0.12 85 / 0.30)",
+                                    color: "oklch(0.85 0.18 85)",
+                                    border:
+                                      "1px solid oklch(0.55 0.18 85 / 0.5)",
+                                  }}
+                                >
+                                  ⏳ Admin is verifying payment...
+                                </span>
+                              )}
+                              {isHeld && (
+                                <>
+                                  <span
+                                    className="text-xs px-2.5 py-1 rounded-lg font-semibold self-start"
+                                    style={{
+                                      background: "oklch(0.25 0.10 145 / 0.35)",
+                                      color: "oklch(0.80 0.20 145)",
+                                      border:
+                                        "1px solid oklch(0.52 0.18 145 / 0.6)",
+                                    }}
+                                  >
+                                    ✅ Payment Secured! Start Working Now.
+                                  </span>
+                                  <span
+                                    className="text-xs"
+                                    style={{ color: "oklch(0.58 0.05 145)" }}
+                                  >
+                                    The Admin is now holding the funds. You are
+                                    guaranteed payment once the task is verified
+                                    by the poster.
+                                  </span>
+                                  <MarkDoneButton
+                                    task={task}
+                                    setAllTasks={setAllTasks}
+                                  />
+                                </>
+                              )}
+                              {!isPending && !isHeld && (
+                                <span
+                                  className="text-xs"
+                                  style={{ color: "oklch(0.72 0.12 295)" }}
+                                >
+                                  ✅ Hired! Waiting for Admin to verify Poster's
+                                  payment.
+                                </span>
+                              )}
                             </div>
                           )}
 
@@ -3666,20 +3685,64 @@ function ProfileScreen({
                   No tasks found yet. Start by posting one!
                 </p>
               ) : (
-                postedTasksDeduped.map((t, i) => (
-                  <PostedTaskCard
-                    key={t.task_id || i}
-                    task={t as LiveTask}
-                    index={i}
-                  />
-                ))
+                postedTasksDeduped.map((t, i) => {
+                  const isHistory = !("deadline" in t);
+                  const statusLabel = isHistory
+                    ? "Completed"
+                    : (t as LiveTask).worker_id
+                      ? "In Progress"
+                      : "Active";
+                  const statusColor = isHistory
+                    ? "oklch(0.68 0.18 145)"
+                    : (t as LiveTask).worker_id
+                      ? "oklch(0.78 0.20 295)"
+                      : "oklch(0.68 0.12 200)";
+                  const statusBg = isHistory
+                    ? "oklch(0.22 0.07 145 / 0.3)"
+                    : (t as LiveTask).worker_id
+                      ? "oklch(0.22 0.08 295 / 0.3)"
+                      : "oklch(0.20 0.05 200 / 0.3)";
+                  return (
+                    <div
+                      key={t.task_id || i}
+                      data-ocid={`profile.posted.item.${i + 1}`}
+                      className="rounded-xl p-3 flex items-center justify-between gap-2"
+                      style={{
+                        background: "oklch(0.18 0.01 265)",
+                        border: "1px solid oklch(0.28 0.012 265)",
+                      }}
+                    >
+                      <div className="flex flex-col gap-0.5 min-w-0">
+                        <span className="text-sm font-semibold text-foreground truncate">
+                          {t.task_name}
+                        </span>
+                        <span
+                          className="text-xs font-bold"
+                          style={{ color: "oklch(0.78 0.20 295)" }}
+                        >
+                          ₹{t.price}
+                        </span>
+                      </div>
+                      <span
+                        className="text-xs px-2 py-0.5 rounded-full shrink-0 font-semibold"
+                        style={{
+                          background: statusBg,
+                          color: statusColor,
+                          border: `1px solid ${statusColor}40`,
+                        }}
+                      >
+                        {statusLabel}
+                      </span>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Earnings History Modal */}
+      {/* Tasks Completed Modal */}
       {activeModal === "completed" && (
         <div
           style={modalOverlay}
@@ -3697,7 +3760,7 @@ function ProfileScreen({
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-foreground">
-                Earnings History
+                Tasks Completed
               </h3>
               <button
                 type="button"
@@ -3732,15 +3795,8 @@ function ProfileScreen({
                     </span>
                     <div className="flex justify-between text-xs text-muted-foreground">
                       <span>{t.completion_date || "—"}</span>
-                      <span
-                        style={{
-                          color:
-                            t.payment_status === "Paid Out"
-                              ? "oklch(0.68 0.18 145)"
-                              : "oklch(0.65 0 0)",
-                        }}
-                      >
-                        {t.payment_status || "Pending"}
+                      <span style={{ color: "oklch(0.75 0.15 75)" }}>
+                        {t.rating_score ? `${t.rating_score} ⭐` : "No rating"}
                       </span>
                     </div>
                   </div>
@@ -3769,7 +3825,7 @@ function ProfileScreen({
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-foreground">
-                Total Earned
+                Earnings Ledger
               </h3>
               <button
                 type="button"
@@ -3784,12 +3840,12 @@ function ProfileScreen({
               className="overflow-y-auto flex-1 space-y-2 pr-1"
               style={{ maxHeight: "50vh" }}
             >
-              {paidOutTasks.length === 0 ? (
+              {completedTasks.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-6">
-                  No paid out tasks yet.
+                  No earnings yet. Help someone out!
                 </p>
               ) : (
-                paidOutTasks.map((t, i) => (
+                completedTasks.map((t, i) => (
                   <div
                     key={t.task_id || i}
                     data-ocid={`profile.earned.item.${i + 1}`}
