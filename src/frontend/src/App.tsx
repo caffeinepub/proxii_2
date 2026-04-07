@@ -47,6 +47,7 @@ interface LiveTask {
   worker_id?: string;
   payment_status?: string;
   upi_username?: string;
+  is_flagged?: string;
 }
 
 interface UserRow {
@@ -96,6 +97,127 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ── Content Moderation ──────────────────────────────────────────────────────
+type ModerationVerdict =
+  | { verdict: "ok" }
+  | { verdict: "block"; reason: string }
+  | { verdict: "flag"; reason: string };
+
+function moderateContent(
+  title: string,
+  description: string,
+): ModerationVerdict {
+  const text = `${title} ${description}`.toLowerCase();
+
+  // BLOCK patterns - clear violations
+  const BLOCK_PATTERNS: { pattern: RegExp; label: string }[] = [
+    // Drugs / illegal substances
+    {
+      pattern:
+        /\b(weed|ganja|charas|bhang|cocaine|heroin|meth|mdma|lsd|hash|marijuana|narcotics?|drug deal)\b/,
+      label: "drug-related content",
+    },
+    // Alcohol & tobacco (explicit sales/sourcing)
+    {
+      pattern:
+        /\b(sell.*alcohol|buy.*alcohol|alcohol.*deliver|procure.*liquor|tobacco.*deal|cigarette.*sell|smok(e|ing).*supply)\b/,
+      label: "alcohol or tobacco supply",
+    },
+    // Jugaad with dangerous chemicals
+    {
+      pattern:
+        /\b(jugaad.*(acid|chemical|explosive|petrol|ammonia|bleach|solvent)|dangerous.*chemical.*jugaad)\b/,
+      label: "dangerous chemical jugaad",
+    },
+    // Weapons & explosives
+    {
+      pattern:
+        /\b(weapon|knife.*attack|gun|pistol|bomb|explosive|grenade|firearm|ammunition|blade.*harm)\b/,
+      label: "weapons or explosives",
+    },
+    // High-risk power tools (harm context)
+    {
+      pattern: /\b(chainsaw.*hire|angle.?grinder.*attack|power.?tool.*harm)\b/,
+      label: "dangerous tool misuse",
+    },
+    // Explicit academic cheating
+    {
+      pattern:
+        /\b(cheat.*exam|exam.*cheat|write.*exam.*for|appear.*exam.*instead|take.*exam.*behalf)\b/,
+      label: "exam cheating",
+    },
+    // Proxy attendance - explicit
+    {
+      pattern:
+        /\b(proxy.*attendance|attendance.*proxy|mark.*present.*instead|sign.*attendance.*behalf|fake.*attendance)\b/,
+      label: "proxy attendance",
+    },
+    // Profanity
+    {
+      pattern:
+        /\b(fuck|shit|bitch|asshole|bastard|motherfuck|cunt|dick.*head|whore|slut)\b/,
+      label: "profanity",
+    },
+    // Hate speech
+    {
+      pattern:
+        /\b(kill (all |the )?(hindus?|muslims?|sikhs?|christians?|dalits?|upper.?caste)|death to |ethnic.?cleans)\b/,
+      label: "hate speech",
+    },
+  ];
+
+  // FLAG patterns - borderline / suspicious
+  const FLAG_PATTERNS: { pattern: RegExp; label: string }[] = [
+    // Vague drug references
+    {
+      pattern:
+        /\b(stuff|grass|green|party stuff|recreational)\b.*\b(deliver|get|source|supply|arrange)\b/,
+      label: "possible substance reference",
+    },
+    // Suspicious alcohol wording
+    {
+      pattern: /\b(booze|daaru|liquor|beer|vodka|whisky)\b/,
+      label: "alcohol reference",
+    },
+    // Cigarette / tobacco vague
+    {
+      pattern: /\b(sutta|cigarette|bidi|tobacco)\b/,
+      label: "tobacco reference",
+    },
+    // Vague attendance manipulation
+    {
+      pattern:
+        /\b(bunk.*cover|cover.*bunk|appear.*class.*for|mark.*for me|attendance.*help)\b/,
+      label: "possible attendance manipulation",
+    },
+    // Vague assignment ghostwriting
+    {
+      pattern:
+        /\b(do.*assignment.*for me|complete.*homework.*behalf|write.*answer.*sheet)\b/,
+      label: "possible academic malpractice",
+    },
+    // Suspicious chemicals
+    {
+      pattern: /\b(acid|ammonia|explosive.*material|flammable.*chemical)\b/,
+      label: "chemical reference",
+    },
+  ];
+
+  for (const { pattern, label } of BLOCK_PATTERNS) {
+    if (pattern.test(text)) {
+      return { verdict: "block", reason: label };
+    }
+  }
+
+  for (const { pattern, label } of FLAG_PATTERNS) {
+    if (pattern.test(text)) {
+      return { verdict: "flag", reason: label };
+    }
+  }
+
+  return { verdict: "ok" };
 }
 
 // ── SheetDB helpers ──────────────────────────────────────────────────────────
@@ -1782,11 +1904,23 @@ function PostTaskScreen({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setStatus("sending");
     setErrorMsg("");
+
+    // Content moderation safety check
+    const modResult = moderateContent(fields.title, fields.description);
+    if (modResult.verdict === "block") {
+      setStatus("error");
+      setErrorMsg(
+        "Wait! Your post seems to violate our Community Guidelines. Please remove any restricted items or language to continue.",
+      );
+      return;
+    }
+
+    setStatus("sending");
     try {
       const userId = localStorage.getItem("proxii_user_id") ?? "";
       const randStr = Math.random().toString(36).slice(2, 7);
+      const isFlagged = modResult.verdict === "flag" ? "True" : "False";
       await postTask({
         task_id: `task_${randStr}`,
         poster_id: userId,
@@ -1797,6 +1931,7 @@ function PostTaskScreen({
         location: fields.location,
         Description: fields.description,
         category: fields.category,
+        is_flagged: isFlagged,
       });
       const newTask: LiveTask = {
         task_id: `task_${randStr}`,
@@ -1809,6 +1944,7 @@ function PostTaskScreen({
         deadline: fields.deadline,
         category: fields.category,
         poster_id: userId,
+        is_flagged: isFlagged,
       };
       onTaskPosted?.(newTask);
       setLastTask(fields);
@@ -4123,7 +4259,7 @@ export default function App() {
         <Header activeTab={activeTab} onTabChange={handleTabChange} />
         {activeTab === "explore" && (
           <ExploreScreen
-            tasks={tasks}
+            tasks={tasks.filter((t) => t.is_flagged !== "True")}
             loading={tasksLoading}
             fetchError={fetchError}
             currentUserId={userId}
@@ -4141,7 +4277,11 @@ export default function App() {
         {activeTab === "post" && (
           <PostTaskScreen
             onGoToExplore={() => handleTabChange("explore")}
-            onTaskPosted={(task) => setTasks((prev) => [task, ...prev])}
+            onTaskPosted={(task) => {
+              if (task.is_flagged !== "True") {
+                setTasks((prev) => [task, ...prev]);
+              }
+            }}
           />
         )}
         {activeTab === "profile" && (
